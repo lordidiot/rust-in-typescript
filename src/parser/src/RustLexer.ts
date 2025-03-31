@@ -2,6 +2,7 @@
 
 import * as antlr from "antlr4ng";
 import { Token } from "antlr4ng";
+import RustLexerBase from "./RustLexerBase";
 
 
 export class RustLexer extends RustLexerBase {
