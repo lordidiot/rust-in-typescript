@@ -1,18 +1,30 @@
 # using ANTLR with "SourceAcademy Conductor"
 
-## Life is hard
+## Development setup
 
 Re-building the github pages everytime is messy, we can just self-host the build output.
 
 ```bash
-# In one terminal
-npm serve
+# Terminal 1
+yarn serve
 
-# Separately
+# Terminal 2
 ngrok http 3000
+
+# Terminal 3
+yarn watch
 ```
 
-After each code change `npm build`.
+Now set the `conductor.evaluator.url` in [Source Academy](https://sourceacademy.org/features) to https://xxx.ngrok-free.app/index.js.
+Any updates should be immediately propagated once you rerun the code in source.
+
+##  Running locally
+
+Instead of running in source academy, we can run locally as well.
+
+```bash
+yarn local examples/expression.rs
+```
 
 ## starting point:
 Refer to Sam's repository: https://github.com/tsammeow/conductor-runner-example
