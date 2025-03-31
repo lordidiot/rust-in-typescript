@@ -1,5 +1,19 @@
 # using ANTLR with "SourceAcademy Conductor"
 
+## Life is hard
+
+Re-building the github pages everytime is messy, we can just self-host the build output.
+
+```bash
+# In one terminal
+npm serve
+
+# Separately
+ngrok http 3000
+```
+
+After each code change `npm build`.
+
 ## starting point:
 Refer to Sam's repository: https://github.com/tsammeow/conductor-runner-example
 I have forked it and made some configuartion changes to make it work with ANTLR.
