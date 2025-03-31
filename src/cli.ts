@@ -7,6 +7,7 @@ import { Chunk, RunnerStatus } from "conductor/dist/conductor/types";
 import { ConductorError } from "conductor/dist/common/errors";
 import { ModuleClass } from "conductor/dist/conductor/module/types/ModuleClass";
 import { PluginClass } from "conductor/dist/conduit/types";
+import { RustEvaluator } from "./RustEvaluator";
 
 // Simple console-based runner plugin
 class ConsoleRunner implements IRunnerPlugin {
@@ -57,7 +58,7 @@ if (!filename) {
 }
 
 const runner = new ConsoleRunner();
-const evaluator = new SimpleLangEvaluator(runner);
+const evaluator = new RustEvaluator(runner);
 
 fs.readFile(filename, "utf-8", (err, data) => {
     if (err) {

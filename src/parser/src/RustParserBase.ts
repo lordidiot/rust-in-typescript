@@ -6,6 +6,6 @@ export default abstract class RustParserBase extends Parser {
     }
 
     next(expect: string): boolean {
-        return this._input.LA(1) === expect.charCodeAt(0);
+        return this.inputStream.LA(1) === expect.charCodeAt(0);
     }
 }
