@@ -8,7 +8,8 @@
   "scripts": {
     "build": "rollup -c",
     "generate-parser": "antlr4ng -Dlanguage=TypeScript -visitor -o src/parser src/SimpleLang.g4",
-    "serve": "serve dist --no-clipboard --cors"
+    "serve": "serve dist --no-clipboard --cors",
+    "watch": "rollup -c -w"
   },
   "repository": {
     "type": "git",
