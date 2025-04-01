@@ -428,7 +428,7 @@ statement
     ;
 
 letStatement
-    : outerAttribute* KW_LET patternNoTopAlt (COLON type_)? (EQ expression)? SEMI
+    : KW_LET identifierPattern (COLON type_)? (EQ expression)? SEMI
     ;
 
 expressionStatement
@@ -832,9 +832,10 @@ pathPattern
 
 // 10.1
 type_
-    : typeNoBounds
-    | implTraitType
-    | traitObjectType
+    : identifier
+//    : typeNoBounds
+//    | implTraitType
+//    | traitObjectType
     ;
 
 typeNoBounds
