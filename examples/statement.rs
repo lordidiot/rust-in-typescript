@@ -1,1 +1,1 @@
-let a: i32 = 5;
+let a: i32 = &mut b;

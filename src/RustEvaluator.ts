@@ -8,9 +8,11 @@ import { RustCompilerVisitor } from "./RustCompiler";
 
 export class RustEvaluator extends BasicEvaluator {
     private compilerVisitor: RustCompilerVisitor;
+    private isDebug: boolean;
 
-    constructor(conductor: IRunnerPlugin) {
+    constructor(conductor: IRunnerPlugin, isDebug: boolean = false) {
         super(conductor);
+        this.isDebug = isDebug;
         this.compilerVisitor = new RustCompilerVisitor();
     }
 
@@ -29,15 +31,17 @@ export class RustEvaluator extends BasicEvaluator {
             const parser = new RustParser(tokenStream);
             
             // Compile the expression
-            const tree = parser.statement();
-            // console.log('tree', tree.toStringTree(parser));
-            console.log(prettyPrint(tree.toStringTree(parser)));
-            return;
+            const tree = parser.blockExpression();
+            if (this.isDebug) {
+                console.log(prettyPrint(tree.toStringTree(parser)));
+            }
             const bytecode = this.compile(tree);
 
             // Run the bytecode
-            const vm = new RustVirtualMachine(bytecode);
-            console.log('bytecode', bytecode);
+            const vm = new RustVirtualMachine(bytecode, 1000000, this.isDebug);
+            if (this.isDebug) {
+                console.log("Bytecode:", bytecode);
+            }
             const result = vm.run();
 
             // Send the result to the REPL

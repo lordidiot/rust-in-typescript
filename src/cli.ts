@@ -50,15 +50,17 @@ class ConsoleRunner implements IRunnerPlugin {
     }
 }
 
-const filename = process.argv[2];
+const isDebug = process.argv.indexOf("--debug") !== -1;
+const argv = process.argv.filter(arg => !arg.startsWith("-"));
+const filename = argv.at(-1);
 
 if (!filename) {
-    console.error("Usage: node cli.js <filename>");
+    console.error("Usage: node cli.js [--debug] <filename>");
     process.exit(1);
 }
 
 const runner = new ConsoleRunner();
-const evaluator = new RustEvaluator(runner);
+const evaluator = new RustEvaluator(runner, isDebug);
 
 fs.readFile(filename, "utf-8", (err, data) => {
     if (err) {
