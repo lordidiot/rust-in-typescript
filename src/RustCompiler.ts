@@ -2,6 +2,7 @@ import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree } from "antlr4ng
 import { ArithmeticOrLogicalExpressionContext, BlockExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpressionContext, StatementContext, StatementsContext } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
 import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP } from "./RustVirtualMachine";
+import { cloneDeep } from "lodash-es";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
 declare module "antlr4ng" {
@@ -11,7 +12,45 @@ declare module "antlr4ng" {
 }
 
 type BuiltinType = "i32" | "u32" | "()";
-type RustType = BuiltinType;
+type Owned = {
+    kind: "owned";
+    readRefs: number;
+    writeRefs: number;
+    type: BuiltinType;
+}
+type ReadRef = {
+    kind: "readRef";
+    owner: string;
+    type: BuiltinType;
+}
+type WriteRef = {
+    kind: "writeRef";
+    owner: string;
+    type: BuiltinType;
+}
+type PrimitiveType = {
+    kind: "primitive";
+    type: BuiltinType;
+}
+type RustType = Owned | ReadRef | WriteRef | PrimitiveType;
+const UNIT_TYPE: PrimitiveType = { kind: "primitive", type: "()" }; 
+const I32_TYPE: PrimitiveType = { kind: "primitive", type: "i32" };
+const U32_TYPE: PrimitiveType = { kind: "primitive", type: "u32" };
+const makeOwned = (type: BuiltinType): Owned => ({ kind: "owned", readRefs: 0, writeRefs: 0, type });
+const makeReadRef = (ownerName: string, ownerType: Owned): ReadRef => {
+    if (ownerType.kind !== "owned") {
+        throw new Error("Cannot create readRef from non-owned type");
+    }
+    ownerType.readRefs++;
+    return { kind: "readRef", owner: ownerName, type: ownerType.type };
+};
+const makeWriteRef = (ownerName: string, ownerType: Owned): WriteRef => {
+    if (ownerType.kind !== "owned") {
+        throw new Error("Cannot create writeRef from non-owned type");
+    }
+    ownerType.writeRefs++;
+    return { kind: "writeRef", owner: ownerName, type: ownerType.type };
+};
 
 type ScanResults = {
     names: string[];
@@ -72,7 +111,9 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
     visitLetStatement(ctx: LetStatementContext): ScanResults {
         const name = ctx.identifierPattern().identifier().getText();
         // TODO: Error on case where type annotation is not present
-        const type = ctx.type_()!.unit_type() ? "()" : ctx.type_()!.identifier()?.getText();
+        const type = ctx.type_()!.unit_type() ?
+              UNIT_TYPE
+            : makeOwned(ctx.type_()!.identifier()!.getText() as BuiltinType);
         return {
             names: [name],
             types: [type]
@@ -82,18 +123,22 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
 
 class TypeEnvironment {
     types: Map<string, RustType>;
-    parent: TypeEnvironment | null;
 
-    constructor(parent: TypeEnvironment | null, locals: ScanResults) {
-        this.types = new Map();
-        this.parent = parent;
-        for (let i = 0; i < locals.names.length; i++) {
-            this.types.set(locals.names[i], locals.types[i]);
+    constructor(locals: ScanResults | null = null, existingTypes: Map<string, RustType> | null = null) {
+        if (existingTypes !== null) {
+            this.types = cloneDeep(existingTypes);
+        } else {
+            this.types = new Map();
+        }
+        if (locals !== null) {
+            for (let i = 0; i < locals.names.length; i++) {
+                this.types.set(locals.names[i], locals.types[i]);
+            }
         }
     }
 
     extend(locals: ScanResults): TypeEnvironment {
-        return new TypeEnvironment(this, locals);
+        return new TypeEnvironment(locals, this.types);
     }
 
     lookupType(name: string): RustType | null {
@@ -101,9 +146,7 @@ class TypeEnvironment {
         if (type !== undefined) {
             return type;
         }
-        // Recursively check the parent environment
-        let envType = this.parent?.lookupType(name);
-        return envType;
+        return null;
     }
 }
 
@@ -112,7 +155,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     constructor() {
         super();
-        this.typeEnv = new TypeEnvironment(null, EMPTY_SCAN_RESULTS);
+        this.typeEnv = new TypeEnvironment();
     }
 
     private withNewEnvironment(ctx: ParserRuleContext, fn: () => RustType): RustType {
@@ -131,23 +174,22 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
     visitArithmeticOrLogicalExpression(ctx: ArithmeticOrLogicalExpressionContext): RustType {
         const leftType = this.visit(ctx.getChild(0));
         const rightType = this.visit(ctx.getChild(2));
-        if (leftType !== rightType) {
-            throw new Error(`Type error: ${leftType} and ${rightType} are not compatible`);
+        if (leftType.type !== rightType.type) {
+            throw new Error(`Type error: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)} are not compatible. Line ${ctx.start.line}`);
         }
-        ctx.type = leftType;
-        return ctx.type;
+        return makeOwned(leftType.type as BuiltinType);
     }
 
     visitBlockExpression(ctx: BlockExpressionContext): RustType {
         return this.withNewEnvironment(ctx, () => {
             this.visitChildren(ctx); // Type check all children
             if (ctx.statements() === null) {
-                return "()";
+                return UNIT_TYPE;
             }
             if (ctx.statements().expression() !== null) {
                 return ctx.statements().expression().type;
             }
-            return "()";
+            return UNIT_TYPE;
         });
     }
 
@@ -163,7 +205,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     visitLiteralExpression(ctx: LiteralExpressionContext): RustType {
         if (ctx.INTEGER_LITERAL()) { // TODO: Could be u32
-            ctx.type = "i32";
+            ctx.type = I32_TYPE;
             return ctx.type;
         }
         throw new Error("Not implemented (visitLiteralExpression)");
