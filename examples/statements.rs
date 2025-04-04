@@ -1,5 +1,9 @@
 {
-    let a: () = 1 + 32;
+    let a: i32 = {
+        let b: i32 = 42;
+        b;
+        b
+    }
     let b: i32 = 64;
     a + b
 }

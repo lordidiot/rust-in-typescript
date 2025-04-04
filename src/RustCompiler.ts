@@ -1,7 +1,7 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree } from "antlr4ng";
 import { ArithmeticOrLogicalExpressionContext, BlockExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpressionContext, StatementContext, StatementsContext } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
-import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET } from "./RustVirtualMachine";
+import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP } from "./RustVirtualMachine";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
 declare module "antlr4ng" {
@@ -240,6 +240,17 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
         return this.withNewEnvironment(ctx, () => {
             return this.visitChildren(ctx);
         });
+    }
+
+    visitStatements(ctx: StatementsContext): Bytecode[] {
+        let bytecode = [];
+        ctx.statement().forEach((statement: StatementContext) => {
+            bytecode = bytecode.concat([...this.visit(statement), POP()]);
+        });
+        if (ctx.expression() !== null) {
+            bytecode = bytecode.concat(this.visit(ctx.expression()));
+        }
+        return bytecode;
     }
 
     visitLetStatement(ctx: LetStatementContext): Bytecode[] {

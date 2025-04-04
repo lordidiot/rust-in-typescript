@@ -1,4 +1,5 @@
 export type Bytecode = 
+    | { type: "POP" }
     | { type: "LDCI", operand: number }
     | { type: "ENTER_SCOPE", size: number }
     | { type: "EXIT_SCOPE" }
@@ -11,6 +12,7 @@ export type Bytecode =
     | { type: "MOD" }
     | { type: "DONE" }
 
+export const POP = (): Bytecode => ({ type: "POP" });
 export const LDCI = (operand: number): Bytecode => ({ type: "LDCI", operand });
 export const ENTER_SCOPE = (size: number): Bytecode => ({ type: "ENTER_SCOPE", size });
 export const EXIT_SCOPE = (): Bytecode => ({ type: "EXIT_SCOPE" });
@@ -38,13 +40,45 @@ export class RustVirtualMachine {
         this.isDebug = isDebug;
     }
 
+    private peek(): address {
+        if (this.operandStack.length === 0) {
+            throw new Error("Operand stack is empty");
+        }
+        return this.operandStack[this.operandStack.length - 1];
+    }
+
+    private popInt(): number {
+        const address = this.operandStack.pop()!;
+        const tag = this.heap.getTag(address);
+        if (tag !== INT_TAG) {
+            throw new Error(`Expected INT_TAG, got ${tag}`);
+        }
+        const value = this.heap.geti32(address);
+        return value;
+    }
+
+    private dereferenceOperandStack(): any[] {
+        return this.operandStack.map(address => {
+            const tag = this.heap.getTag(address);
+            if (tag === INT_TAG) {
+                return this.heap.geti32(address);
+            } else {
+                return "unhandled";
+            }
+        });
+    }
+
     // Returns the updated program counter, based on the instruction
     step(): number {
         if (this.isDebug) {
-            console.log(`PC: ${this.pc}, Instruction: ${JSON.stringify(this.bytecode[this.pc])}`);
+            console.log(`PC: ${this.pc}, Instruction: ${JSON.stringify(this.bytecode[this.pc])}, Operand Stack: ${this.dereferenceOperandStack()}`);
         }
         const ins = this.bytecode[this.pc];
         switch (ins.type) {
+            case "POP": {
+                this.operandStack.pop();
+                break;
+            }
             case "LDCI": {
                 const address = this.heap.allocatei32(ins.operand);
                 this.operandStack.push(address);
@@ -54,7 +88,6 @@ export class RustVirtualMachine {
                 const size = ins.size;
                 const newEnv = this.heap.allocateEnvironment(this.env, size);
                 this.env = newEnv;
-                const frame = this.heap.getPairSecond(newEnv);
                 break;
             }
             case "EXIT_SCOPE": {
@@ -62,7 +95,7 @@ export class RustVirtualMachine {
                 break;
             }
             case "SET": {
-                const value = this.operandStack.pop()!;
+                const value = this.peek();
                 const frameIndex = ins.frameIndex;
                 const localIndex = ins.localIndex;
                 let env = this.env;
@@ -86,35 +119,35 @@ export class RustVirtualMachine {
                 break;
             }
             case "ADD": {
-                const b = this.operandStack.pop()!;
-                const a = this.operandStack.pop()!;
-                this.operandStack.push(this.heap.geti32(a) + this.heap.geti32(b));
+                const b = this.popInt();
+                const a = this.popInt();
+                this.operandStack.push(this.heap.allocatei32(a + b));
                 break;
             }
             case "SUB": {
-                const b = this.operandStack.pop()!;
-                const a = this.operandStack.pop()!;
-                this.operandStack.push(this.heap.geti32(a) - this.heap.geti32(b));
+                const b = this.popInt();
+                const a = this.popInt();
+                this.operandStack.push(this.heap.allocatei32(a - b));
                 break;
             }
             case "MUL": {
-                const b = this.operandStack.pop()!;
-                const a = this.operandStack.pop()!;
-                this.operandStack.push(this.heap.geti32(a) * this.heap.geti32(b));
+                const b = this.popInt();
+                const a = this.popInt();
+                this.operandStack.push(this.heap.allocatei32(a * b));
                 break;
             }
             case "DIV": {
-                const b = this.operandStack.pop()!;
-                const a = this.operandStack.pop()!;
-                if (this.heap.geti32(b) === 0) throw new Error("Division by zero");
-                this.operandStack.push(this.heap.geti32(a) / this.heap.geti32(b));
+                const b = this.popInt();
+                const a = this.popInt();
+                if (b === 0) throw new Error("Division by zero");
+                this.operandStack.push(this.heap.allocatei32(Math.floor(a / b)));
                 break;
             }
             case "MOD": {
-                const b = this.operandStack.pop()!;
-                const a = this.operandStack.pop()!;
-                if (this.heap.geti32(b) === 0) throw new Error("Division by zero");
-                this.operandStack.push(this.heap.geti32(a) % this.heap.geti32(b));
+                const b = this.popInt();
+                const a = this.popInt();
+                if (b === 0) throw new Error("Division by zero");
+                this.operandStack.push(this.heap.allocatei32(a % b));
                 break;
             }
             case "DONE": {
@@ -133,7 +166,7 @@ export class RustVirtualMachine {
         while (this.bytecode[this.pc].type !== "DONE") {
             this.pc = this.step();
         }
-        return this.operandStack.pop()!;
+        return this.popInt()!;
     }
 }
 
