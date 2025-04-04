@@ -10,33 +10,16 @@ declare module "antlr4ng" {
     }
 }
 
-ParserRuleContext
+type BuiltinType = "i32" | "u32" | "()";
+type RustType = BuiltinType;
 
-type BuiltinType = "i32" | "u32";
-type RustType = BuiltinType | string | undefined;
-class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> implements RustParserVisitor<RustType> {
-    visitArithmeticOrLogicalExpression(ctx: ArithmeticOrLogicalExpressionContext): RustType {
-        const leftType = this.visit(ctx.getChild(0));
-        const rightType = this.visit(ctx.getChild(2));
-        console.log("leftType", leftType);
-        console.log("rightType", rightType);
-        if (leftType !== rightType) {
-            throw new Error(`Type error: ${leftType} and ${rightType} are not compatible`);
-        }
-        ctx.type
-        return leftType;
-    }
-
-    visitLiteralExpression(ctx: LiteralExpressionContext): RustType {
-        if (ctx.INTEGER_LITERAL()) { // TODO: Could be u32
-            ctx.type = "i32";
-            return "i32";
-        }
-        throw new Error("Not implemented (visitLiteralExpression)");
-    }
+type ScanResults = {
+    names: string[];
+    types: RustType[];
 }
+const EMPTY_SCAN_RESULTS: ScanResults = { names: [], types: [] };
 
-class LocalScannerVisitor extends AbstractParseTreeVisitor<string[]> implements RustParserVisitor<string[]> {
+class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implements RustParserVisitor<ScanResults> {
     selfContext: ParserRuleContext;
 
     constructor(selfContext: ParserRuleContext) {
@@ -44,47 +27,146 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<string[]> implements 
         this.selfContext = selfContext;
     }
 
-    defaultResult(): string[] {
-        return [];
+    defaultResult(): ScanResults {
+        return EMPTY_SCAN_RESULTS;
     }
 
-    aggregateResult(aggregate: string[], nextResult: string[] | null): string[] {
+    aggregateResult(aggregate: ScanResults, nextResult: ScanResults | null): ScanResults {
         if (nextResult !== null) {
-            return aggregate.concat(nextResult);
+            return {
+                names: aggregate.names.concat(nextResult.names),
+                types: aggregate.types.concat(nextResult.types)
+            };
         }
         return aggregate;
     };
 
-    visitBlockExpression(ctx: BlockExpressionContext): string[] {
+    visitBlockExpression(ctx: BlockExpressionContext): ScanResults {
         if (ctx !== this.selfContext) {
-            return [];
+            return EMPTY_SCAN_RESULTS;
         }
         return this.visitChildren(ctx);
     }
 
-    visitIfExpression(ctx: IfExpressionContext): string[] {
+    visitIfExpression(ctx: IfExpressionContext): ScanResults {
         if (ctx !== this.selfContext) {
-            return [];
+            return EMPTY_SCAN_RESULTS;
         }
         return this.visitChildren(ctx);
     }
 
-    visitLoopExpression(ctx: LoopExpressionContext): string[] {
+    visitLoopExpression(ctx: LoopExpressionContext): ScanResults {
         if (ctx !== this.selfContext) {
-            return [];
+            return EMPTY_SCAN_RESULTS;
         }
         return this.visitChildren(ctx);
     }
 
-    visitMatchExpression(ctx: MatchExpressionContext): string[] {
+    visitMatchExpression(ctx: MatchExpressionContext): ScanResults {
         if (ctx !== this.selfContext) {
-            return [];
+            return EMPTY_SCAN_RESULTS;
         }
         return this.visitChildren(ctx);
     }
 
-    visitLetStatement(ctx: LetStatementContext): string[] {
-        return [ctx.identifierPattern().identifier().getText()];
+    visitLetStatement(ctx: LetStatementContext): ScanResults {
+        const name = ctx.identifierPattern().identifier().getText();
+        // TODO: Error on case where type annotation is not present
+        const type = ctx.type_()!.unit_type() ? "()" : ctx.type_()!.identifier()?.getText();
+        return {
+            names: [name],
+            types: [type]
+        };
+    }
+}
+
+class TypeEnvironment {
+    types: Map<string, RustType>;
+    parent: TypeEnvironment | null;
+
+    constructor(parent: TypeEnvironment | null, locals: ScanResults) {
+        this.types = new Map();
+        this.parent = parent;
+        for (let i = 0; i < locals.names.length; i++) {
+            this.types.set(locals.names[i], locals.types[i]);
+        }
+    }
+
+    extend(locals: ScanResults): TypeEnvironment {
+        return new TypeEnvironment(this, locals);
+    }
+
+    lookupType(name: string): RustType | null {
+        const type = this.types.get(name);
+        if (type !== undefined) {
+            return type;
+        }
+        // Recursively check the parent environment
+        let envType = this.parent?.lookupType(name);
+        return envType;
+    }
+}
+
+export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> implements RustParserVisitor<RustType> {
+    typeEnv: TypeEnvironment;
+
+    constructor() {
+        super();
+        this.typeEnv = new TypeEnvironment(null, EMPTY_SCAN_RESULTS);
+    }
+
+    private withNewEnvironment(ctx: ParserRuleContext, fn: () => RustType): RustType {
+        // TODO: Error on duplicate variable names
+        const scanResults = new LocalScannerVisitor(ctx).visit(ctx);
+        const previousEnv = this.typeEnv;
+        this.typeEnv = this.typeEnv.extend(scanResults);
+        
+        try {
+            return fn();
+        } finally {
+            this.typeEnv = previousEnv;
+        }
+    }
+
+    visitArithmeticOrLogicalExpression(ctx: ArithmeticOrLogicalExpressionContext): RustType {
+        const leftType = this.visit(ctx.getChild(0));
+        const rightType = this.visit(ctx.getChild(2));
+        if (leftType !== rightType) {
+            throw new Error(`Type error: ${leftType} and ${rightType} are not compatible`);
+        }
+        ctx.type = leftType;
+        return ctx.type;
+    }
+
+    visitBlockExpression(ctx: BlockExpressionContext): RustType {
+        return this.withNewEnvironment(ctx, () => {
+            this.visitChildren(ctx); // Type check all children
+            if (ctx.statements() === null) {
+                return "()";
+            }
+            if (ctx.statements().expression() !== null) {
+                return ctx.statements().expression().type;
+            }
+            return "()";
+        });
+    }
+
+    visitPathExpression(ctx: PathExpressionContext): RustType {
+        const name = ctx.getText();
+        const type = this.typeEnv.lookupType(name);
+        if (type === null) {
+            throw new Error(`Variable ${name} not found in environment, this should not happen`);
+        }
+        ctx.type = type;
+        return ctx.type;
+    }
+
+    visitLiteralExpression(ctx: LiteralExpressionContext): RustType {
+        if (ctx.INTEGER_LITERAL()) { // TODO: Could be u32
+            ctx.type = "i32";
+            return ctx.type;
+        }
+        throw new Error("Not implemented (visitLiteralExpression)");
     }
 }
 
@@ -143,12 +225,12 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
 
     private withNewEnvironment(ctx: ParserRuleContext, fn: () => Bytecode[]): Bytecode[] {
         // TODO: Error on duplicate variable names
-        const locals = new LocalScannerVisitor(ctx).visit(ctx);
+        const { names } = new LocalScannerVisitor(ctx).visit(ctx);
         const previousEnv = this.compilerEnv;
-        this.compilerEnv = this.compilerEnv.extend(locals);
+        this.compilerEnv = this.compilerEnv.extend(names);
         
         try {
-            return [ENTER_SCOPE(locals.length), ...fn(), EXIT_SCOPE()];
+            return [ENTER_SCOPE(names.length), ...fn(), EXIT_SCOPE()];
         } finally {
             this.compilerEnv = previousEnv;
         }

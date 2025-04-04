@@ -4,7 +4,7 @@ import { RustLexer } from "./parser/src/RustLexer";
 import { RustParser } from "./parser/src/RustParser";
 import { CharStream, CommonTokenStream, ParseTree } from "antlr4ng";
 import { Bytecode, DONE, RustVirtualMachine } from "./RustVirtualMachine";
-import { RustCompilerVisitor } from "./RustCompiler";
+import { RustCompilerVisitor, RustTypeCheckerVisitor } from "./RustCompiler";
 
 export class RustEvaluator extends BasicEvaluator {
     private compilerVisitor: RustCompilerVisitor;
@@ -29,9 +29,13 @@ export class RustEvaluator extends BasicEvaluator {
             const lexer = new RustLexer(inputStream);
             const tokenStream = new CommonTokenStream(lexer);
             const parser = new RustParser(tokenStream);
-            
-            // Compile the expression
+
+            // Type check
             const tree = parser.blockExpression();
+            const typeCheckVisitor = new RustTypeCheckerVisitor();
+            typeCheckVisitor.visit(tree);
+            
+            // Compile
             if (this.isDebug) {
                 console.log(prettyPrint(tree.toStringTree(parser)));
             }

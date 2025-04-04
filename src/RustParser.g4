@@ -427,8 +427,9 @@ statement
     | macroInvocationSemi
     ;
 
+// Changed: type annotations are compulsory
 letStatement
-    : KW_LET identifierPattern (COLON type_)? (EQ expression)? SEMI
+    : KW_LET identifierPattern (COLON type_) (EQ expression)? SEMI
     ;
 
 expressionStatement
@@ -833,9 +834,14 @@ pathPattern
 // 10.1
 type_
     : identifier
+    | unit_type
 //    : typeNoBounds
 //    | implTraitType
 //    | traitObjectType
+    ;
+
+unit_type
+    : LPAREN WHITESPACE* RPAREN
     ;
 
 typeNoBounds

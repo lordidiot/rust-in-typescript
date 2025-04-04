@@ -179,6 +179,7 @@ import { SlicePatternContext } from "./RustParser.js";
 import { SlicePatternItemsContext } from "./RustParser.js";
 import { PathPatternContext } from "./RustParser.js";
 import { Type_Context } from "./RustParser.js";
+import { Unit_typeContext } from "./RustParser.js";
 import { TypeNoBoundsContext } from "./RustParser.js";
 import { ParenthesizedTypeContext } from "./RustParser.js";
 import { NeverTypeContext } from "./RustParser.js";
@@ -2066,6 +2067,16 @@ export class RustParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitType_?: (ctx: Type_Context) => void;
+    /**
+     * Enter a parse tree produced by `RustParser.unit_type`.
+     * @param ctx the parse tree
+     */
+    enterUnit_type?: (ctx: Unit_typeContext) => void;
+    /**
+     * Exit a parse tree produced by `RustParser.unit_type`.
+     * @param ctx the parse tree
+     */
+    exitUnit_type?: (ctx: Unit_typeContext) => void;
     /**
      * Enter a parse tree produced by `RustParser.typeNoBounds`.
      * @param ctx the parse tree
