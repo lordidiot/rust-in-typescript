@@ -10,6 +10,7 @@ export type Bytecode =
     | { type: "MUL" }
     | { type: "DIV" }
     | { type: "MOD" }
+    | { type: "FREE" , frameIndex: number, localIndex: number}
     | { type: "DONE" }
 
 export const POP = (): Bytecode => ({ type: "POP" });
@@ -23,6 +24,7 @@ export const SUB = (): Bytecode => ({ type: "SUB" });
 export const MUL = (): Bytecode => ({ type: "MUL" });
 export const DIV = (): Bytecode => ({ type: "DIV" });
 export const MOD = (): Bytecode => ({ type: "MOD" });
+export const FREE = (frameIndex: number, localIndex: number): Bytecode => ({ type: "FREE", frameIndex, localIndex});
 export const DONE = (): Bytecode => ({ type: "DONE" });
 
 export class RustVirtualMachine {
@@ -150,6 +152,20 @@ export class RustVirtualMachine {
                 this.operandStack.push(this.heap.allocatei32(a % b));
                 break;
             }
+            case "FREE": {
+                //TODO
+
+                // const frameIndex = ins.frameIndex;
+                // const localIndex = ins.localIndex;
+                // 
+                // const addressToFree = 1;
+                // this.heap.free(addressToFree);
+                
+                // if (this.isDebug) {
+                //     console.log(`Freed memory at address: ${addressToFree}`);
+                // }
+                break;
+            }
             case "DONE": {
                 throw new Error("Should be unreachable");
             }
@@ -180,6 +196,8 @@ class Heap {
     private heapTop: address = 0;
     private heapSize: number;
     private view: DataView;
+    private freeList: address[] = [];
+    private allocations: Map<address, number> = new Map(); // Track allocated blocks
 
     constructor(heapSize: number) {
         this.heapSize = heapSize;
@@ -192,6 +210,22 @@ class Heap {
     // Returns the address of the allocated memory
     allocate(tag: number, size: number): address {
         size += WORD_SIZE; // Add header size
+
+        // First try to reuse freed blocks
+        for (let i = 0; i < this.freeList.length; i++) {
+            const candidate = this.freeList[i];
+            const candidateSize = this.view.getUint32(candidate - WORD_SIZE + 1);
+            
+            if (candidateSize >= size) {
+                // Found a suitable free block
+                this.freeList.splice(i, 1);
+                this.view.setUint8(candidate - WORD_SIZE, tag);
+                this.view.setUint32(candidate - WORD_SIZE + 1, size);
+                this.allocations.set(candidate, size);
+                return candidate;
+            }
+        }
+
         if (this.heapTop + size > this.heapSize) {
             throw new Error("Heap overflow");
         }
@@ -248,6 +282,22 @@ class Heap {
         // TODO: Doesn't do anything right now
         // Remember to subtract header size (WORD_SIZE) from address
         // to get the actual address in the heap
+        const headerAddress = address - WORD_SIZE;
+        
+        // Verify this is a valid allocation
+        if (!this.allocations.has(address)) {
+            throw new Error(`Attempt to free invalid address: ${address}`);
+        }
+        const size = this.view.getUint32(headerAddress + 1);
+        this.freeList.push(headerAddress);
+        this.allocations.delete(address);
+        
+        // Zero out the memory
+        for (let i = 0; i < size; i++) {
+            this.view.setUint8(headerAddress + i, 0);
+        }
+        
+        this.view.setUint8(headerAddress, 255); // Special "freed" tag
     }
 
     // Helper functions

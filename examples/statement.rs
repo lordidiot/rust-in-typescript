@@ -1,1 +1,5 @@
-let a: i32 = &mut b;
+{
+    let x: i32 = 5;
+    x = 10;
+    x
+}
