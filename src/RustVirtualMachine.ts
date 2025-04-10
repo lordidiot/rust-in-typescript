@@ -109,6 +109,9 @@ export class RustVirtualMachine {
                 for (let i = 0; i < ins.indirection; i++) {
                     value = this.heap.deference(value);
                 }
+                if (ins.indirection == -1) { // Special case
+                    value = frame.add((localIndex + 1) * WORD_SIZE);
+                }
                 this.operandStack.push(value);
                 break;
             }

@@ -164,7 +164,6 @@ import { InclusiveRangePatternContext } from "./RustParser.js";
 import { HalfOpenRangePatternContext } from "./RustParser.js";
 import { ObsoleteRangePatternContext } from "./RustParser.js";
 import { RangePatternBoundContext } from "./RustParser.js";
-import { ReferencePatternContext } from "./RustParser.js";
 import { StructPatternContext } from "./RustParser.js";
 import { StructPatternElementsContext } from "./RustParser.js";
 import { StructPatternFieldsContext } from "./RustParser.js";
@@ -1242,12 +1241,6 @@ export class RustParserVisitor<Result> extends AbstractParseTreeVisitor<Result> 
      * @return the visitor result
      */
     visitRangePatternBound?: (ctx: RangePatternBoundContext) => Result;
-    /**
-     * Visit a parse tree produced by `RustParser.referencePattern`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitReferencePattern?: (ctx: ReferencePatternContext) => Result;
     /**
      * Visit a parse tree produced by `RustParser.structPattern`.
      * @param ctx the parse tree

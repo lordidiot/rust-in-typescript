@@ -228,7 +228,7 @@ CARET   : '^';
 NOT     : '!';
 AND     : '&';
 OR      : '|';
-ANDAND  : '&&';
+// ANDAND  : '&&'; removed to avoid confusion in type parameter
 OROR    : '||';
 //SHL: '<<'; SHR: '>>'; removed to avoid confusion in type parameter
 PLUSEQ     : '+=';

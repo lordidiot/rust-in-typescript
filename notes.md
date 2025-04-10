@@ -9,3 +9,6 @@
 * https://stanford-cs242.github.io/f19/lectures/08-2-typestate.html
 * https://borretti.me/article/type-systems-memory-safety
 * https://github.com/alshdavid/BorrowScript
+* https://github.com/rust-lang/rfcs/blob/master/text/2094-nll.md
+* https://www.ralfj.de/blog/2018/11/16/stacked-borrows-implementation.html
+* https://www.cs.cmu.edu/~aldrich/papers/classic/tse12-typestate.pdf

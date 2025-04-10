@@ -449,7 +449,7 @@ expression
     | expression LPAREN callParams? RPAREN                           # CallExpression                // 8.2.9
     | expression LSQUAREBRACKET expression RSQUAREBRACKET            # IndexExpression               // 8.2.6
     | expression QUESTION                                            # ErrorPropagationExpression    // 8.2.4
-    | (AND | ANDAND) KW_MUT? expression                              # BorrowExpression              // 8.2.4
+    | AND KW_MUT? expression                                         # BorrowExpression              // 8.2.4
     | STAR expression                                                # DereferenceExpression         // 8.2.4
     | (MINUS | NOT) expression                                         # NegationExpression            // 8.2.4
     | expression KW_AS typeNoBounds                                  # TypeCastExpression            // 8.2.4
@@ -460,7 +460,7 @@ expression
     | expression CARET expression                                    # ArithmeticOrLogicalExpression // 8.2.4
     | expression OR expression                                       # ArithmeticOrLogicalExpression // 8.2.4
     | expression comparisonOperator expression                       # ComparisonExpression          // 8.2.4
-    | expression ANDAND expression                                   # LazyBooleanExpression         // 8.2.4
+    | expression AND AND expression                                  # LazyBooleanExpression         // 8.2.4 // TODO
     | expression OROR expression                                     # LazyBooleanExpression         // 8.2.4
     | expression DOTDOT expression?                                  # RangeExpression               // 8.2.14
     | DOTDOT expression?                                             # RangeExpression               // 8.2.14
@@ -722,7 +722,7 @@ patternWithoutRange
     | identifierPattern
     | wildcardPattern
     | restPattern
-    | referencePattern
+    // | referencePattern
     | structPattern
     | tupleStructPattern
     | tuplePattern
@@ -771,9 +771,11 @@ rangePatternBound
     | pathPattern
     ;
 
+/*
 referencePattern
     : (AND | ANDAND) KW_MUT? patternWithoutRange
     ;
+*/
 
 structPattern
     : pathInExpression LCURLYBRACE structPatternElements? RCURLYBRACE
@@ -835,6 +837,7 @@ pathPattern
 type_
     : identifier
     | unit_type
+    | referenceType
 //    : typeNoBounds
 //    | implTraitType
 //    | traitObjectType
@@ -887,7 +890,7 @@ sliceType
 
 // 10.1.13
 referenceType
-    : AND lifetime? KW_MUT? typeNoBounds
+    : AND /*lifetime?*/ KW_MUT? type_
     ;
 
 rawPointerType
@@ -1160,7 +1163,7 @@ macroPunctuationToken
     | NOT
     | AND
     | OR
-    | ANDAND
+    // | ANDAND
     | OROR
     // already covered by LT and GT in macro | shl | shr
     | PLUSEQ

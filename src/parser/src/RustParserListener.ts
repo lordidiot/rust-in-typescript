@@ -164,7 +164,6 @@ import { InclusiveRangePatternContext } from "./RustParser.js";
 import { HalfOpenRangePatternContext } from "./RustParser.js";
 import { ObsoleteRangePatternContext } from "./RustParser.js";
 import { RangePatternBoundContext } from "./RustParser.js";
-import { ReferencePatternContext } from "./RustParser.js";
 import { StructPatternContext } from "./RustParser.js";
 import { StructPatternElementsContext } from "./RustParser.js";
 import { StructPatternFieldsContext } from "./RustParser.js";
@@ -1917,16 +1916,6 @@ export class RustParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitRangePatternBound?: (ctx: RangePatternBoundContext) => void;
-    /**
-     * Enter a parse tree produced by `RustParser.referencePattern`.
-     * @param ctx the parse tree
-     */
-    enterReferencePattern?: (ctx: ReferencePatternContext) => void;
-    /**
-     * Exit a parse tree produced by `RustParser.referencePattern`.
-     * @param ctx the parse tree
-     */
-    exitReferencePattern?: (ctx: ReferencePatternContext) => void;
     /**
      * Enter a parse tree produced by `RustParser.structPattern`.
      * @param ctx the parse tree

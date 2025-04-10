@@ -1,5 +1,5 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpressionContext, StatementContext, StatementsContext } from "./parser/src/RustParser";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, DereferenceExpressionContext, ExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
 import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
@@ -11,6 +11,7 @@ declare module "antlr4ng" {
     }
 }
 
+/*
 type BuiltinType = "i32" | "u32" | "()";
 type Owned = {
     kind: "owned";
@@ -50,7 +51,31 @@ const makeReadRef = (ownerName: string, type: BuiltinType, lifetimeCount: number
 const makeWriteRef = (ownerName: string, type: BuiltinType, lifetimeCount: number = 0): WriteRef => {
     return { kind: "writeRef", owner: ownerName, type: type, lifetimeCount, isAlive:true };
 };
+*/
 
+const UNIT_TYPE = "()"
+interface Ref { kind: "ref"; target: RustType; }
+interface MutRef { kind: "mutRef"; target: RustType; }
+type PrimitiveType = "i32" | "u32" | "()";
+type RustType =
+  | PrimitiveType 
+  | Ref
+  | MutRef;
+
+function typeEqual(a: RustType, b: RustType): boolean {
+    if (a === b) return true;
+    if (typeof a === "string" && typeof b === "string") {
+        return a === b;
+    } else if (typeof a === "string" || typeof b === "string") {
+        return false;
+    } else {
+        return a.kind === b.kind && typeEqual(a.target, b.target);
+    }
+}
+
+function isPrimitive(type: RustType): type is PrimitiveType {
+    return typeof type === "string";
+}
 
 type UsageMap = Map<string, number>;
 
@@ -130,11 +155,29 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
         return this.visitChildren(ctx);
     }
 
+    private parseType(ctx: Type_Context): RustType {
+        if (ctx.unit_type()) {
+            return "()";
+        }
+        if (ctx.referenceType()) {
+            if (ctx.referenceType().KW_MUT()) {
+                return { kind: "mutRef", target: this.parseType(ctx.referenceType().type_()) };
+            }
+            return { kind: "ref", target: this.parseType(ctx.referenceType().type_()) };
+        } else if (ctx.identifier()) {
+            return ctx.identifier().getText() as PrimitiveType;
+        }
+    }
+
     visitLetStatement(ctx: LetStatementContext): ScanResults {
         // // TODO: Error on case where type annotation is not present
         const name = ctx.identifierPattern().identifier().getText();
-        const typeCtx = ctx.type_();
-
+        const type = this.parseType(ctx.type_());
+        return {
+            names: [name],
+            types: [type]
+        };
+        /*
         if (!typeCtx) {
             throw new Error(`Missing type annotation in let statement for variable ${name}`);
         }
@@ -164,9 +207,9 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
             names: [name],
             types: [type]
         };
+        */
     }
 }
-
 
 class TypeEnvironment {
     types: Map<string, RustType>;
@@ -211,6 +254,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         const scanResults = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
         const previousEnv = this.typeEnv;
         this.typeEnv = this.typeEnv.extend(scanResults);
+        console.log("New environment", scanResults);
         
         try {
             return fn();
@@ -222,10 +266,10 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
     visitArithmeticOrLogicalExpression(ctx: ArithmeticOrLogicalExpressionContext): RustType {
         const leftType = this.visit(ctx.getChild(0));
         const rightType = this.visit(ctx.getChild(2));
-        if (leftType.type !== rightType.type) {
+        if (!typeEqual(leftType, rightType)) {
             throw new Error(`Type error: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)} are not compatible. Line ${ctx.start.line}`);
         }
-        return makeOwned(leftType.type as BuiltinType);
+        return leftType;
     }
 
     visitBlockExpression(ctx: BlockExpressionContext): RustType {
@@ -253,23 +297,66 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     visitLiteralExpression(ctx: LiteralExpressionContext): RustType {
         if (ctx.INTEGER_LITERAL()) { // TODO: Could be u32
-            ctx.type = I32_TYPE;
+            ctx.type = "i32";
             return ctx.type;
         }
         throw new Error("Not implemented (visitLiteralExpression)");
     }
 
+    private isLValue(ctx: ExpressionContext): boolean {
+        if (ctx === null) {
+            return false;
+        } else if (ctx instanceof PathExpressionContext) {
+            return true;
+        } else if (ctx instanceof DereferenceExpressionContext) {
+            return this.isLValue(ctx.expression());
+        }
+        return false;
+    }
+
+    visitLetStatement(ctx: LetStatementContext): RustType {
+        const name = ctx.identifierPattern().identifier().getText();
+        const type = this.typeEnv.lookupType(name);
+        if (type === null) {
+            throw new Error(`Variable ${name} not found in environment, this should not happen`);
+        }
+        if (ctx.expression() === null) {
+            return UNIT_TYPE; // `let x;` style statement
+        }
+        const exprType = this.visit(ctx.expression());
+        if (!typeEqual(type, exprType)) {
+            throw new Error(`mismatched types.\n Debug: ${JSON.stringify(type)} and ${JSON.stringify(exprType)}. Line ${ctx.start.line}`);
+        }
+        return UNIT_TYPE;
+    }
+
     visitAssignmentExpression(ctx: AssignmentExpressionContext) : RustType {
+        if (!this.isLValue(ctx.expression(0))) {
+            throw new Error(`invalid left-hand side of assignment: ${ctx.expression(0).getText()}`);
+        }
         const leftType = this.visit(ctx.getChild(0));
         const rightType = this.visit(ctx.getChild(2));
-        if (leftType.type !== rightType.type) {
-            throw new Error(`Type error: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)} are not compatible. Line ${ctx.start.line}`);
+        if (typeEqual(leftType, rightType)) {
+            throw new Error(`mismatched types.\n Debug: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)}. Line ${ctx.start.line}`);
         }
-        return leftType;
+        return UNIT_TYPE;
     }
-    
-        
 
+    visitBorrowExpression(ctx: BorrowExpressionContext): RustType {
+        const expressionType = this.visit(ctx.expression());
+        if (ctx.KW_MUT()) {
+            return { kind: "mutRef", target: expressionType };
+        }
+        return { kind: "ref", target: expressionType };
+    }
+
+    visitDereferenceExpression(ctx: DereferenceExpressionContext): RustType {
+        const expressionType = this.visit(ctx.expression());
+        if (!isPrimitive(expressionType)) {
+            return expressionType.target;
+        }
+        throw new Error(`type ${expressionType} cannot be dereferenced. Line ${ctx.start.line}`);
+    }
 }
 
 // Each CompilerEnvironment has a 1-to-1 mapping to a Rust scope.
@@ -399,7 +486,6 @@ class BorrowChecker {
 }
 
 
-
 export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> implements RustParserVisitor<Bytecode[]> {
     compilerEnv: CompilerEnvironment;
     typeEnv: TypeEnvironment;
@@ -468,6 +554,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
             return []; // `let x;` style statement
         }
 
+        /*
         // borrow checker
         BorrowChecker.borrowCheck(name, this.typeEnv);
 
@@ -515,6 +602,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
         }
 
         return bytecode
+        */
     }
 
     visitArithmeticOrLogicalExpression(ctx: ArithmeticOrLogicalExpressionContext): Bytecode[] {
@@ -533,6 +621,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
         const pos = this.compilerEnv.lookupPosition(name);
         const type = this.typeEnv.lookupType(name);
 
+        /*
         if (!pos || !type || type.kind === "primitive") {
             throw new Error(`Cannot use variable ${name}`);
         }
@@ -540,9 +629,11 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
         if (!type.isAlive) {
             throw new Error(`Lifetime has ended for ${name}`);
         }
+        */
         
         const bytecode = [GET(pos.frameIndex, pos.localIndex, 0)]; // TODO: Indirection should depend on type
 
+        /*
         // Lifetime Check
         type.lifetimeCount--;
         if (type.lifetimeCount === 0) {
@@ -557,6 +648,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
                 }
             }
         }
+        */
 
         return bytecode;
     }
@@ -577,6 +669,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
             throw new Error(`Variable ${name} not found in environment, this should not happen`);
         }
 
+        /*
         // borrow checker
         if (type.kind === "readRef") {
             throw new Error(`Cannot assign to non mutable reference ${name}`);
@@ -624,12 +717,9 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
                  bytecode.push(FREE(envPos.frameIndex, envPos.localIndex));
              }
          }
- 
+        */
 
         return bytecode;
 
     }
-    
-
-
 }
