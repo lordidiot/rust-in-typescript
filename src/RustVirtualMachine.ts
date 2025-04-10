@@ -3,8 +3,8 @@ export type Bytecode =
     | { type: "LDCI", operand: number }
     | { type: "ENTER_SCOPE", size: number }
     | { type: "EXIT_SCOPE" }
-    | { type: "SET", frameIndex: number, localIndex: number }
-    | { type: "GET", frameIndex: number, localIndex: number }
+    | { type: "SET", frameIndex: number, localIndex: number, indirection: number }
+    | { type: "GET", frameIndex: number, localIndex: number, indirection: number }
     | { type: "ADD" }
     | { type: "SUB" }
     | { type: "MUL" }
@@ -17,8 +17,10 @@ export const POP = (): Bytecode => ({ type: "POP" });
 export const LDCI = (operand: number): Bytecode => ({ type: "LDCI", operand });
 export const ENTER_SCOPE = (size: number): Bytecode => ({ type: "ENTER_SCOPE", size });
 export const EXIT_SCOPE = (): Bytecode => ({ type: "EXIT_SCOPE" });
-export const SET = (frameIndex: number, localIndex: number): Bytecode => ({ type: "SET", frameIndex, localIndex });
-export const GET = (frameIndex: number, localIndex: number): Bytecode => ({ type: "GET", frameIndex, localIndex });
+export const SET = (frameIndex: number, localIndex: number, indirection: number): Bytecode =>
+    ({ type: "SET", frameIndex, localIndex, indirection });
+export const GET = (frameIndex: number, localIndex: number, indirection: number): Bytecode =>
+    ({ type: "GET", frameIndex, localIndex, indirection });
 export const ADD = (): Bytecode => ({ type: "ADD" });
 export const SUB = (): Bytecode => ({ type: "SUB" });
 export const MUL = (): Bytecode => ({ type: "MUL" });
@@ -28,52 +30,36 @@ export const FREE = (frameIndex: number, localIndex: number): Bytecode => ({ typ
 export const DONE = (): Bytecode => ({ type: "DONE" });
 
 export class RustVirtualMachine {
-    private operandStack: address[];
+    private operandStack: Value[];
     private bytecode: Bytecode[];
     private pc: number;
     private heap: Heap;
     private heapSize: number;
-    private env: address;
+    private env: Value;
     private isDebug: boolean;
 
     constructor(bytecode: Bytecode[], heapSize: number = 1000000, isDebug: boolean = false) {
         this.bytecode = bytecode;
         this.heapSize = heapSize;
         this.isDebug = isDebug;
+        this.env = Value.fromAddress(0xffffffff) // Invalid address
     }
 
-    private peek(): address {
+    private peek(): Value {
         if (this.operandStack.length === 0) {
             throw new Error("Operand stack is empty");
         }
         return this.operandStack[this.operandStack.length - 1];
     }
 
-    private popInt(): number {
-        const address = this.operandStack.pop()!;
-        const tag = this.heap.getTag(address);
-        if (tag !== INT_TAG) {
-            throw new Error(`Expected INT_TAG, got ${tag}`);
-        }
-        const value = this.heap.geti32(address);
-        return value;
-    }
-
-    private dereferenceOperandStack(): any[] {
-        return this.operandStack.map(address => {
-            const tag = this.heap.getTag(address);
-            if (tag === INT_TAG) {
-                return this.heap.geti32(address);
-            } else {
-                return "unhandled";
-            }
-        });
+    private prettifyOperandStack(): any[] {
+        return this.operandStack.map(value => value.toString());
     }
 
     // Returns the updated program counter, based on the instruction
     step(): number {
         if (this.isDebug) {
-            console.log(`PC: ${this.pc}, Instruction: ${JSON.stringify(this.bytecode[this.pc])}, Operand Stack: ${this.dereferenceOperandStack()}`);
+            console.log(`PC: ${this.pc}, Instruction: ${JSON.stringify(this.bytecode[this.pc])}, Operand Stack: ${this.prettifyOperandStack()}`);
         }
         const ins = this.bytecode[this.pc];
         switch (ins.type) {
@@ -82,8 +68,7 @@ export class RustVirtualMachine {
                 break;
             }
             case "LDCI": {
-                const address = this.heap.allocatei32(ins.operand);
-                this.operandStack.push(address);
+                this.operandStack.push(Value.fromi32(ins.operand)); // TODO: Handle different types
                 break;
             }
             case "ENTER_SCOPE": {
@@ -105,7 +90,11 @@ export class RustVirtualMachine {
                     env = this.heap.getPairFirst(env);
                 }
                 const frame = this.heap.getPairSecond(env);
-                this.heap.setArrayElement(frame, localIndex, value);
+                let address = frame.add((localIndex + 1) * WORD_SIZE); // Does this need to be a function
+                for (let i = 0; i < ins.indirection; i++) {
+                    address = this.heap.deference(address);
+                }
+                this.heap.setValue(address, value);
                 break;
             }
             case "GET": {
@@ -116,40 +105,46 @@ export class RustVirtualMachine {
                     env = this.heap.getPairFirst(env);
                 }
                 const frame = this.heap.getPairSecond(env);
-                const value = this.heap.getArrayElement(frame, localIndex);
+                let value = this.heap.getArrayElement(frame, localIndex);
+                for (let i = 0; i < ins.indirection; i++) {
+                    value = this.heap.deference(value);
+                }
                 this.operandStack.push(value);
                 break;
             }
             case "ADD": {
-                const b = this.popInt();
-                const a = this.popInt();
-                this.operandStack.push(this.heap.allocatei32(a + b));
+                const b = this.operandStack.pop()!;
+                const a = this.operandStack.pop()!;
+                const res = Value.fromi32(a.asi32() + b.asi32());
+                this.operandStack.push(res);
                 break;
             }
             case "SUB": {
-                const b = this.popInt();
-                const a = this.popInt();
-                this.operandStack.push(this.heap.allocatei32(a - b));
+                const b = this.operandStack.pop()!;
+                const a = this.operandStack.pop()!;
+                const res = Value.fromi32(a.asi32() - b.asi32());
+                this.operandStack.push(res);
                 break;
             }
             case "MUL": {
-                const b = this.popInt();
-                const a = this.popInt();
-                this.operandStack.push(this.heap.allocatei32(a * b));
+                const b = this.operandStack.pop()!;
+                const a = this.operandStack.pop()!;
+                const res = Value.fromi32(a.asi32() * b.asi32());
+                this.operandStack.push(res);
                 break;
             }
             case "DIV": {
-                const b = this.popInt();
-                const a = this.popInt();
-                if (b === 0) throw new Error("Division by zero");
-                this.operandStack.push(this.heap.allocatei32(Math.floor(a / b)));
+                const b = this.operandStack.pop()!;
+                const a = this.operandStack.pop()!;
+                if (b.asi32() === 0) throw new Error("Division by zero");
+                const res = Value.fromi32(Math.floor(a.asi32() * b.asi32()));
                 break;
             }
             case "MOD": {
-                const b = this.popInt();
-                const a = this.popInt();
-                if (b === 0) throw new Error("Division by zero");
-                this.operandStack.push(this.heap.allocatei32(a % b));
+                const b = this.operandStack.pop()!;
+                const a = this.operandStack.pop()!;
+                if (b.asi32() === 0) throw new Error("Division by zero");
+                const res = Value.fromi32(a.asi32() / b.asi32());
                 break;
             }
             case "FREE": {
@@ -182,12 +177,90 @@ export class RustVirtualMachine {
         while (this.bytecode[this.pc].type !== "DONE") {
             this.pc = this.step();
         }
-        return this.popInt()!;
+        return this.operandStack.pop()!.asi32();
+    }
+}
+
+// Defintion
+// Value is a union type of [primitive, address]
+// it is repesented as a number (integer), where the lowest 32-bits are the information
+// the next 16-bits are the tag, storing the type of the value
+export class Value {
+    private tag: number; // unsigned 16-bit
+    private value: number; // unsigned 32-bit
+
+    static readonly INVALID_TAG = 0;
+    static readonly ADDRESS_TAG = 1;
+    static readonly PRIMITIVE_TAG = 2;
+
+    static fromi32(value: number): Value {
+        if (value < 0) {
+            value = value + 0x100000000; // Convert to unsigned
+        }
+        return new Value(Value.PRIMITIVE_TAG, value);
+    }
+
+    static fromu32(value: number): Value {
+        return new Value(Value.PRIMITIVE_TAG, value);
+    }
+
+    static fromAddress(value: number): Value {
+        return new Value(Value.ADDRESS_TAG, value);
+    }
+
+    constructor(tag: number, value: number) {
+        this.tag = tag;
+        this.value = value;
+    }
+
+    isAddress(): boolean {
+        return this.tag === Value.ADDRESS_TAG;
+    }
+
+    isPrimitive(): boolean {
+        return this.tag === Value.PRIMITIVE_TAG;
+    }
+
+    asu32(): number {
+        return this.value;
+    }
+
+    asi32(): number {
+        return this.value > 0x7FFFFFFF ?
+            this.value - 0x100000000 :
+            this.value;
+    }
+
+    asAddress(): number {
+        return this.value;
+    }
+
+    getTag(): number {
+        return this.tag;
+    }
+
+    getValue(): number {
+        return this.value;
+    }
+
+    add(other: number): Value {
+        return Value.fromu32(this.value + other);
+    }
+
+    toString(): string {
+        if (this.isAddress()) {
+            return `[addr ${this.value}]`;
+        } else if (this.isPrimitive()) {
+            return `[val ${this.value}]`;
+        } else {
+            return `[invalid]`;
+        }
     }
 }
 
 export type address = number;
 export const WORD_SIZE = 8;
+const HALF_WORD_SIZE = 4;
 const INT_TAG = 0;
 const PAIR_TAG = 1;
 const ARRAY_TAG = 2;
@@ -208,7 +281,7 @@ class Heap {
     // Header: [1 byte tag] [4 bytes size] [3 bytes padding]
     // Automatically adds header size
     // Returns the address of the allocated memory
-    allocate(tag: number, size: number): address {
+    allocate(tag: number, size: number): Value {
         size += WORD_SIZE; // Add header size
 
         // First try to reuse freed blocks
@@ -222,7 +295,7 @@ class Heap {
                 this.view.setUint8(candidate - WORD_SIZE, tag);
                 this.view.setUint32(candidate - WORD_SIZE + 1, size);
                 this.allocations.set(candidate, size);
-                return candidate;
+                return Value.fromAddress(candidate);
             }
         }
 
@@ -233,13 +306,13 @@ class Heap {
         this.heapTop += size;
         this.view.setUint8(address, tag);
         this.view.setUint32(address + 1, size);
-        return address + WORD_SIZE;
+        return Value.fromAddress(address + WORD_SIZE);
     }
 
     // [8 bytes value]
-    allocateInt(): address {
+    /*
+    allocateInt(): Value {
         const address = this.allocate(INT_TAG, WORD_SIZE);
-        this.view.setInt32(address, 0);
         return address;
     }
 
@@ -254,23 +327,24 @@ class Heap {
         this.view.setUint32(address, value);
         return address;
     }
+    */
 
     // [8 bytes first] [8 bytes second]
-    // For simplicity, pair elements are **always** addresses
+    // For simplicity, pair elements are **always** values
     // A little bit wasteful, but clearer to use WORD_SIZE per field
-    allocatePair(): address {
+    allocatePair(): Value {
         return this.allocate(PAIR_TAG, 2 * WORD_SIZE);
     }
 
     // [8 bytes length] [8 * length bytes data]
-    // For simplicity, array elements are **always** addresses
-    allocateArray(length: number): address {
+    // For simplicity, array elements are **always** values
+    allocateArray(length: number): Value {
         const address = this.allocate(ARRAY_TAG, (length + 1) * WORD_SIZE);
-        this.view.setInt32(address, length);
+        this.view.setUint32(address.asAddress(), length);
         return address;
     }
 
-    allocateEnvironment(previousEnv: address, frameSize: number): address {
+    allocateEnvironment(previousEnv: Value, frameSize: number): Value {
         const frame = this.allocateArray(frameSize);
         const env = this.allocatePair();
         this.setPairFirst(env, previousEnv);
@@ -302,57 +376,60 @@ class Heap {
 
     // Helper functions
     // TODO: Add checks for type confusion
-    geti32(address: address): number {
-        return this.view.getInt32(address);
+    getValue(address: Value): Value {
+        const val = this.view.getUint32(address.asAddress());
+        const tag = this.view.getUint16(address.asAddress() + HALF_WORD_SIZE);
+        return new Value(tag, val);
     }
 
-    getu32(address: address): number {
-        return this.view.getUint32(address);
+    setValue(address: Value, value: Value): void {
+        this.view.setUint32(address.asAddress(), value.getValue());
+        this.view.setUint16(address.asAddress() + HALF_WORD_SIZE, value.getTag());
     }
 
-    seti32(address: address, value: number): void {
-        this.view.setInt32(address, value);
+    getTag(address: Value): number {
+        return this.view.getUint8(address.asAddress() - WORD_SIZE);
     }
 
-    setu32(address: address, value: number): void {
-        this.view.setUint32(address, value);
+    getPairFirst(pair: Value): Value {
+        return this.getValue(pair);
     }
 
-    getTag(address: address): number {
-        return this.view.getUint8(address - WORD_SIZE);
+    getPairSecond(pair: Value): Value {
+        return this.getValue(pair.add(WORD_SIZE));
     }
 
-    getPairFirst(pair: address): address {
-        return this.view.getInt32(pair);
+    setPairFirst(pair: Value, value: Value): void {
+        this.setValue(pair, value);
     }
 
-    getPairSecond(pair: address): address {
-        return this.view.getInt32(pair + WORD_SIZE);
+    setPairSecond(pair: Value, value: Value): void {
+        this.setValue(pair.add(WORD_SIZE), value);
     }
 
-    setPairFirst(pair: address, value: address): void {
-        this.view.setInt32(pair, value);
+    getArrayLength(address: Value): number {
+        return this.view.getInt32(address.asAddress());
     }
 
-    setPairSecond(pair: address, value: address): void {
-        this.view.setInt32(pair + WORD_SIZE, value);
-    }
-
-    getArrayLength(address: address): number {
-        return this.view.getInt32(address);
-    }
-
-    getArrayElement(array: address, index: number): address {
+    getArrayElement(array: Value, index: number): Value {
         if (index < 0 || index >= this.getArrayLength(array)) {
             throw new Error("Array index out of bounds");
         }
-        return this.view.getInt32(array + (index + 1) * WORD_SIZE);
+        return this.getValue(array.add((index + 1) * WORD_SIZE))
     }
 
-    setArrayElement(array: address, index: number, value: address): void {
+    setArrayElement(array: Value, index: number, value: Value): void {
         if (index < 0 || index >= this.getArrayLength(array)) {
             throw new Error("Array index out of bounds");
         }
-        this.view.setInt32(array + (index + 1) * WORD_SIZE, value);
+        this.setValue(array.add((index + 1) * WORD_SIZE), value);
+    }
+
+    deference(address: Value): Value {
+        if (!address.isAddress()) { // TODO: Can remove this once compiler is done
+                                    // Compiler should guarantee that no type confusions occur
+            throw new Error("Dereferencing non-address value");
+        }
+        return this.getValue(address);
     }
 }

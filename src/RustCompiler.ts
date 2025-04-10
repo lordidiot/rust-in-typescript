@@ -495,7 +495,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
             }
         }
 
-        bytecode.push(SET(envPos.frameIndex, envPos.localIndex));
+        bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0)); // TODO: Indirection should depend on type
 
         if (!type || type.kind === "primitive") {
             throw new Error(`Cannot use variable ${name}`);
@@ -541,7 +541,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
             throw new Error(`Lifetime has ended for ${name}`);
         }
         
-        const bytecode = [GET(pos.frameIndex, pos.localIndex)];
+        const bytecode = [GET(pos.frameIndex, pos.localIndex, 0)]; // TODO: Indirection should depend on type
 
         // Lifetime Check
         type.lifetimeCount--;
