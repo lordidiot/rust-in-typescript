@@ -205,19 +205,23 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         if (!typeEqual(leftType, rightType)) {
             throw new Error(`Type error: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)} are not compatible. Line ${ctx.start.line}`);
         }
-        return leftType;
+        ctx.type = leftType;
+        return ctx.type;
     }
 
     visitBlockExpression(ctx: BlockExpressionContext): RustType {
         return this.withNewEnvironment(ctx, () => {
             this.visitChildren(ctx); // Type check all children
             if (ctx.statements() === null) {
-                return UNIT_TYPE;
+                ctx.type = UNIT_TYPE;
+                return ctx.type;
             }
             if (ctx.statements().expression() !== null) {
-                return ctx.statements().expression().type;
+                ctx.type = ctx.statements().expression().type;
+                return ctx.type;
             }
-            return UNIT_TYPE;
+            ctx.type = UNIT_TYPE;
+            return ctx.type;
         });
     }
 
@@ -228,6 +232,11 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
             throw new Error(`Variable ${name} not found in environment, this should not happen`);
         }
         ctx.type = type;
+        return ctx.type;
+    }
+
+    visitPathExpression_(ctx: PathExpression_Context): RustType {
+        ctx.type = this.visit(ctx.pathExpression());
         return ctx.type;
     }
 
@@ -257,13 +266,15 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
             throw new Error(`Variable ${name} not found in environment, this should not happen`);
         }
         if (ctx.expression() === null) {
-            return UNIT_TYPE; // `let x;` style statement
+            ctx.type = UNIT_TYPE;
+            return ctx.type;
         }
         const exprType = this.visit(ctx.expression());
         if (!typeEqual(type, exprType)) {
             throw new Error(`mismatched types.\n Debug: ${JSON.stringify(type)} and ${JSON.stringify(exprType)}. Line ${ctx.start.line}`);
         }
-        return UNIT_TYPE;
+        ctx.type = UNIT_TYPE;
+        return ctx.type;
     }
 
     visitAssignmentExpression(ctx: AssignmentExpressionContext) : RustType {
@@ -275,7 +286,8 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         if (typeEqual(leftType, rightType)) {
             throw new Error(`mismatched types.\n Debug: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)}. Line ${ctx.start.line}`);
         }
-        return UNIT_TYPE;
+        ctx.type = UNIT_TYPE;
+        return ctx.type;
     }
 
     visitBorrowExpression(ctx: BorrowExpressionContext): RustType {
@@ -283,16 +295,15 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
             throw new Error(`borrowing from invalid lvalue: ${ctx.expression().getText()}`);
         }
         const expressionType = this.visit(ctx.expression());
-        if (ctx.KW_MUT()) {
-            return { kind: "mutRef", target: expressionType };
-        }
-        return { kind: "ref", target: expressionType };
+        ctx.type = { kind: ctx.KW_MUT() ? "mutRef" : "ref", target: expressionType };
+        return ctx.type
     }
 
     visitDereferenceExpression(ctx: DereferenceExpressionContext): RustType {
         const expressionType = this.visit(ctx.expression());
         if (!isPrimitive(expressionType)) {
-            return expressionType.target;
+            ctx.type = expressionType.target;
+            return ctx.type;
         }
         throw new Error(`type ${expressionType} cannot be dereferenced. Line ${ctx.start.line}`);
     }
@@ -531,6 +542,9 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
 
     visitBorrowExpression(ctx: BorrowExpressionContext): void {
         const [envPos, indirection] = this.reduceBorrowExpression(ctx.expression());
+        // TODO: The -1 depends on the type of the borrowed expression
+        // If it is a primitive or reference, then -1
+        // If it is a complex/owned type, then 0, since the type is already an address
         this.bytecode.push(GET(envPos.frameIndex, envPos.localIndex, indirection - 1));
     }
 
