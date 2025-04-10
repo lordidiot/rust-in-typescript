@@ -137,14 +137,14 @@ export class RustVirtualMachine {
                 const b = this.operandStack.pop()!;
                 const a = this.operandStack.pop()!;
                 if (b.asi32() === 0) throw new Error("Division by zero");
-                const res = Value.fromi32(Math.floor(a.asi32() * b.asi32()));
+                const res = Value.fromi32(Math.floor(a.asi32() / b.asi32()));
                 break;
             }
             case "MOD": {
                 const b = this.operandStack.pop()!;
                 const a = this.operandStack.pop()!;
                 if (b.asi32() === 0) throw new Error("Division by zero");
-                const res = Value.fromi32(a.asi32() / b.asi32());
+                const res = Value.fromi32(a.asi32() % b.asi32());
                 break;
             }
             case "FREE": {
