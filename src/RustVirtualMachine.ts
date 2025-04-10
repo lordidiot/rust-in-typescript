@@ -5,6 +5,8 @@ export type Bytecode =
     | { type: "EXIT_SCOPE" }
     | { type: "SET", frameIndex: number, localIndex: number, indirection: number }
     | { type: "GET", frameIndex: number, localIndex: number, indirection: number }
+    | { type: "DEREF" }
+    | { type: "WRITE" }
     | { type: "ADD" }
     | { type: "SUB" }
     | { type: "MUL" }
@@ -21,6 +23,8 @@ export const SET = (frameIndex: number, localIndex: number, indirection: number)
     ({ type: "SET", frameIndex, localIndex, indirection });
 export const GET = (frameIndex: number, localIndex: number, indirection: number): Bytecode =>
     ({ type: "GET", frameIndex, localIndex, indirection });
+export const DEREF = (): Bytecode => ({ type: "DEREF" });
+export const WRITE = (): Bytecode => ({ type: "WRITE" });
 export const ADD = (): Bytecode => ({ type: "ADD" });
 export const SUB = (): Bytecode => ({ type: "SUB" });
 export const MUL = (): Bytecode => ({ type: "MUL" });
@@ -113,6 +117,23 @@ export class RustVirtualMachine {
                     value = frame.add((localIndex + 1) * WORD_SIZE);
                 }
                 this.operandStack.push(value);
+                break;
+            }
+            case "DEREF": {
+                let address = this.operandStack.pop()!;
+                if (!address.isAddress()) {
+                    throw new Error("Dereferencing non-address value");
+                }
+                this.operandStack.push(this.heap.deference(address));
+                break;
+            }
+            case "WRITE": {
+                const value = this.operandStack.pop()!;
+                const address = this.operandStack.pop()!;
+                if (!address.isAddress()) {
+                    throw new Error("Dereferencing non-address value");
+                }
+                this.heap.setValue(address, value);
                 break;
             }
             case "ADD": {
@@ -247,7 +268,7 @@ export class Value {
     }
 
     add(other: number): Value {
-        return Value.fromu32(this.value + other);
+        return new Value(this.tag, this.value + other);
     }
 
     toString(): string {

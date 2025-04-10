@@ -17,9 +17,8 @@ export class RustEvaluator extends BasicEvaluator {
     }
 
     compile(tree: ParseTree): Bytecode[] {
-        const bytecode = this.compilerVisitor.visit(tree);
-        bytecode.push(DONE());
-        return bytecode;
+        this.compilerVisitor.visit(tree);
+        return this.compilerVisitor.bytecode.concat([DONE()]); // TODO: Fixup api
     }
 
     async evaluateChunk(chunk: string): Promise<void> {
@@ -39,7 +38,6 @@ export class RustEvaluator extends BasicEvaluator {
             if (this.isDebug) {
                 // console.log(prettyPrint(tree.toStringTree(parser)));
             }
-            return;
             const bytecode = this.compile(tree);
 
             // Run the bytecode

@@ -1,7 +1,7 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, DereferenceExpressionContext, ExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, DereferenceExpressionContext, ExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
-import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE } from "./RustVirtualMachine";
+import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
@@ -10,48 +10,6 @@ declare module "antlr4ng" {
         type?: RustType;
     }
 }
-
-/*
-type BuiltinType = "i32" | "u32" | "()";
-type Owned = {
-    kind: "owned";
-    readRefs: number;
-    writeRefs: number;
-    type: BuiltinType;
-    lifetimeCount: number;
-    isAlive: boolean;
-}
-type ReadRef = {
-    kind: "readRef";
-    owner: string;
-    type: BuiltinType;
-    lifetimeCount: number;
-    isAlive: boolean;
-}
-type WriteRef = {
-    kind: "writeRef";
-    owner: string;
-    type: BuiltinType;
-    lifetimeCount: number;
-    isAlive: boolean;
-}
-type PrimitiveType = {
-    kind: "primitive";
-    type: BuiltinType;
-
-}
-type RustType = Owned | ReadRef | WriteRef | PrimitiveType;
-const UNIT_TYPE: PrimitiveType = { kind: "primitive", type: "()" }; 
-const I32_TYPE: PrimitiveType = { kind: "primitive", type: "i32" };
-const U32_TYPE: PrimitiveType = { kind: "primitive", type: "u32" };
-const makeOwned = (type: BuiltinType, lifetimeCount: number = 0): Owned => ({ kind: "owned", readRefs: 0, writeRefs: 0, type, lifetimeCount, isAlive: true});
-const makeReadRef = (ownerName: string, type: BuiltinType, lifetimeCount: number = 0): ReadRef => {
-    return { kind: "readRef", owner: ownerName, type: type, lifetimeCount, isAlive: true};
-};
-const makeWriteRef = (ownerName: string, type: BuiltinType, lifetimeCount: number = 0): WriteRef => {
-    return { kind: "writeRef", owner: ownerName, type: type, lifetimeCount, isAlive:true };
-};
-*/
 
 const UNIT_TYPE = "()"
 interface Ref { kind: "ref"; target: RustType; }
@@ -75,6 +33,16 @@ function typeEqual(a: RustType, b: RustType): boolean {
 
 function isPrimitive(type: RustType): type is PrimitiveType {
     return typeof type === "string";
+}
+
+function isCopySemantics(type: RustType): boolean {
+    // Only primitive types (i32, u32, and unit)
+    // and immutable references are copy semantics
+    return isPrimitive(type) || type.kind == "ref";
+}
+
+function isMoveSemantics(type: RustType): boolean {
+    return !isCopySemantics(type);
 }
 
 type UsageMap = Map<string, number>;
@@ -177,37 +145,6 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
             names: [name],
             types: [type]
         };
-        /*
-        if (!typeCtx) {
-            throw new Error(`Missing type annotation in let statement for variable ${name}`);
-        }
-
-        let type: RustType;
-        let expr = ctx.expression().getText();
-
-        if (typeCtx.unit_type()) {
-            type = UNIT_TYPE;
-        } else if (expr.includes("&")) {
-            const isMutable = expr.includes("mut");
-            const builtin = typeCtx.identifier()!.getText() as BuiltinType;
-            const lifetime = this.usageMap?.get(name) ?? 0;
-            const ownerName = isMutable
-                                ? expr.replace('&mut','')
-                                : expr.replace('&','');
-            type = isMutable
-                ? makeWriteRef(ownerName, builtin, lifetime)
-                : makeReadRef(ownerName, builtin, lifetime);
-        } else {
-            const builtin = typeCtx.identifier()!.getText() as BuiltinType;
-            const lifetime = this.usageMap?.get(name) ?? 0;
-            type = makeOwned(builtin, lifetime);
-        }
-
-        return {
-            names: [name],
-            types: [type]
-        };
-        */
     }
 }
 
@@ -254,7 +191,6 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         const scanResults = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
         const previousEnv = this.typeEnv;
         this.typeEnv = this.typeEnv.extend(scanResults);
-        console.log("New environment", scanResults);
         
         try {
             return fn();
@@ -306,7 +242,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
     private isLValue(ctx: ExpressionContext): boolean {
         if (ctx === null) {
             return false;
-        } else if (ctx instanceof PathExpressionContext) {
+        } else if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
             return true;
         } else if (ctx instanceof DereferenceExpressionContext) {
             return this.isLValue(ctx.expression());
@@ -343,6 +279,9 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
     }
 
     visitBorrowExpression(ctx: BorrowExpressionContext): RustType {
+        if (!this.isLValue(ctx.expression())) {
+            throw new Error(`borrowing from invalid lvalue: ${ctx.expression().getText()}`);
+        }
         const expressionType = this.visit(ctx.expression());
         if (ctx.KW_MUT()) {
             return { kind: "mutRef", target: expressionType };
@@ -486,28 +425,19 @@ class BorrowChecker {
 }
 
 
-export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> implements RustParserVisitor<Bytecode[]> {
+export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implements RustParserVisitor<void> {
     compilerEnv: CompilerEnvironment;
     typeEnv: TypeEnvironment;
+    bytecode: Bytecode[];
 
     constructor() {
         super();
         this.compilerEnv = new CompilerEnvironment();
         this.typeEnv = new TypeEnvironment();
+        this.bytecode = [];
     }
 
-    defaultResult(): Bytecode[] {
-        return [];
-    }
-
-    aggregateResult(aggregate: Bytecode[], nextResult: Bytecode[] | null): Bytecode[] {
-        if (nextResult !== null) {
-            return aggregate.concat(nextResult);
-        }
-        return aggregate;
-    };
-
-    private withNewEnvironment(ctx: ParserRuleContext, fn: () => Bytecode[]): Bytecode[] {
+    private withNewEnvironment(ctx: ParserRuleContext, fn: () => void): void {
         // TODO: Error on duplicate variable names
         const usageMap = countVariableUsages(ctx);
         const scanResults  = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
@@ -517,33 +447,33 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
         this.compilerEnv = this.compilerEnv.extend(scanResults.names);
         this.typeEnv = this.typeEnv.extend(scanResults);
 
-        
         try {
-            return [ENTER_SCOPE(scanResults.names.length), ...fn(), EXIT_SCOPE()];
+            this.bytecode.push(ENTER_SCOPE(scanResults.names.length));
+            fn();
+            this.bytecode.push(EXIT_SCOPE());
         } finally {
             this.compilerEnv = previousEnv;
             this.typeEnv = prevTypes;
         }
     }
 
-    visitBlockExpression(ctx: BlockExpressionContext): Bytecode[] {
+    visitBlockExpression(ctx: BlockExpressionContext): void {
         return this.withNewEnvironment(ctx, () => {
             return this.visitChildren(ctx);
         });
     }
 
-    visitStatements(ctx: StatementsContext): Bytecode[] {
-        let bytecode = [];
+    visitStatements(ctx: StatementsContext): void {
         ctx.statement().forEach((statement: StatementContext) => {
-            bytecode = bytecode.concat([...this.visit(statement), POP()]);
+            this.visit(statement);
+            this.bytecode.push(POP()); // TODO: Whether to free or not
         });
         if (ctx.expression() !== null) {
-            bytecode = bytecode.concat(this.visit(ctx.expression()));
+            this.visit(ctx.expression());
         }
-        return bytecode;
     }
 
-    visitLetStatement(ctx: LetStatementContext): Bytecode[] {
+    visitLetStatement(ctx: LetStatementContext): void {
         const name = ctx.identifierPattern().identifier().getText();
         const envPos = this.compilerEnv.lookupPosition(name);
         const type = this.typeEnv.lookupType(name);
@@ -551,175 +481,83 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<Bytecode[]> im
             throw new Error(`Variable ${name} not found in environment, this should not happen`);
         }
         if (ctx.expression() === null) {
-            return []; // `let x;` style statement
+            return; // `let x;` style statement
         }
+        this.visit(ctx.expression());
+        this.bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0));
+    }
 
-        /*
-        // borrow checker
-        BorrowChecker.borrowCheck(name, this.typeEnv);
-
-
-        let bytecode = this.visit(ctx.expression());
-
-        // transfer ownership of first variable
-        if(type.kind === "owned") {
-            let firstGetVarName: string | null = null;
-            let pos : EnvironmentPosition;
-            for (const instr of bytecode) {
-                if (instr.type === "GET") {
-                    pos = {frameIndex: instr.frameIndex, localIndex: instr.localIndex};
-                    const varName = this.compilerEnv.lookupName(pos);
-                    
-                    if (varName) {
-                        firstGetVarName = varName;
-                        break;
-                    }
-                }
+    private visitLValueExpression(ctx: ExpressionContext): void {
+        if (ctx instanceof PathExpressionContext) {
+            const name = ctx.getText();
+            const envPos = this.compilerEnv.lookupPosition(name);
+            const type = this.typeEnv.lookupType(name);
+            if (envPos === null) {
+                throw new Error(`Variable ${name} not found in environment, this should not happen`);
             }
-            const oldType = this.typeEnv.lookupType(firstGetVarName);
-            if (oldType !== null && oldType.kind === "owned") {
-                oldType.isAlive = false;
-            }
+            this.bytecode.push(GET(envPos.frameIndex, envPos.localIndex, -1)); // push address of variable
+        } else if (ctx instanceof DereferenceExpressionContext) {
+            this.visitLValueExpression(ctx.expression());
+            this.bytecode.push(DEREF());
+        } else {
+            throw new Error(`Invalid left-hand side of assignment: ${ctx.getText()}`);
         }
+    }
 
-        bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0)); // TODO: Indirection should depend on type
+    visitDereferenceExpression(ctx: DereferenceExpressionContext): void {
+        this.visit(ctx.expression());
+        this.bytecode.push(DEREF());
+    }
 
-        if (!type || type.kind === "primitive") {
-            throw new Error(`Cannot use variable ${name}`);
+    visitAssignmentExpression(ctx: AssignmentExpressionContext): void {
+        this.visitLValueExpression(ctx.expression(0));
+        this.visit(ctx.expression(1));
+        this.bytecode.push(WRITE());
+    }
+
+    // Returns EnvironmentPosition and indirection level
+    private reduceBorrowExpression(ctx: ExpressionContext): [EnvironmentPosition, number] {
+        if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
+            const name = ctx.getText();
+            const envPos = this.compilerEnv.lookupPosition(name);
+            return [envPos, 0];
+        } else if (ctx instanceof DereferenceExpressionContext) {
+            let res = this.reduceBorrowExpression(ctx.expression());
+            res[1]++;
+            return res;
         }
+        throw new Error(`Invalid left-hand side of borrow: ${ctx.getText()}`);
+    }
 
-        // case where declared variable is never used.
-        if (type.lifetimeCount === 0) {
-            if (BorrowChecker.freeCheck(name, this.typeEnv)) {
-                bytecode.push(FREE(envPos.frameIndex, envPos.localIndex));
-            }
-            if (type.kind === "readRef" || type.kind === "writeRef") {
-                if (BorrowChecker.freeCheck(type.owner, this.typeEnv)) {
-                    const ownerPos = this.compilerEnv.lookupPosition(type.owner);
-                    bytecode.push(FREE(ownerPos.frameIndex, ownerPos.localIndex));
-                }
-            }
-        }
-
-        return bytecode
-        */
+    visitBorrowExpression(ctx: BorrowExpressionContext): void {
+        const [envPos, indirection] = this.reduceBorrowExpression(ctx.expression());
+        this.bytecode.push(GET(envPos.frameIndex, envPos.localIndex, indirection - 1));
     }
 
     visitArithmeticOrLogicalExpression(ctx: ArithmeticOrLogicalExpressionContext): Bytecode[] {
-        const bytecode = this.visit(ctx.getChild(0)).concat(this.visit(ctx.getChild(2)));
-        if (ctx.PLUS()) return bytecode.concat([ADD()]);
-        if (ctx.MINUS()) return bytecode.concat([SUB()]);
-        if (ctx.STAR()) return bytecode.concat([MUL()]);
-        if (ctx.SLASH()) return bytecode.concat([DIV()]);
-        if (ctx.PERCENT()) return bytecode.concat([MOD()]);
+        this.visit(ctx.expression(0));
+        this.visit(ctx.expression(1));
+        if (ctx.PLUS()) {
+            this.bytecode.push(ADD());
+            return;
+        } 
         throw new Error("Not implemented (visitArithmeticOrLogicalExpression)");
     }
 
     // TODO: Too naive, doesn't handle a.b.c style statements
-    visitPathExpression(ctx: PathExpressionContext): Bytecode[] {
+    visitPathExpression(ctx: PathExpressionContext): void {
         const name = ctx.getText();
         const pos = this.compilerEnv.lookupPosition(name);
         const type = this.typeEnv.lookupType(name);
-
-        /*
-        if (!pos || !type || type.kind === "primitive") {
-            throw new Error(`Cannot use variable ${name}`);
-        }
-
-        if (!type.isAlive) {
-            throw new Error(`Lifetime has ended for ${name}`);
-        }
-        */
-        
-        const bytecode = [GET(pos.frameIndex, pos.localIndex, 0)]; // TODO: Indirection should depend on type
-
-        /*
-        // Lifetime Check
-        type.lifetimeCount--;
-        if (type.lifetimeCount === 0) {
-            if(BorrowChecker.freeCheck(name, this.typeEnv)) {
-                bytecode.push(FREE(pos.frameIndex, pos.localIndex));
-            }
-            
-            if (type.kind === "readRef" || type.kind === "writeRef") {
-                if (BorrowChecker.freeCheck(type.owner, this.typeEnv)) {
-                    const ownerPos = this.compilerEnv.lookupPosition(type.owner);
-                    bytecode.push(FREE(ownerPos.frameIndex, ownerPos.localIndex));
-                }
-            }
-        }
-        */
-
-        return bytecode;
+        this.bytecode.push(GET(pos.frameIndex, pos.localIndex, 0)); // TODO: Indirection should depend on type
     }
 
-    visitLiteralExpression(ctx: LiteralExpressionContext): Bytecode[] {
+    visitLiteralExpression(ctx: LiteralExpressionContext): void {
         if (ctx.INTEGER_LITERAL()) {
             const value = parseInt(ctx.INTEGER_LITERAL().getText(), 10);
-            return [ LDCI(value) ];
+            this.bytecode.push(LDCI(value));
+            return;
         }
         throw new Error("Not implemented (visitLiteralExpression)");
-    }
-
-    visitAssignmentExpression(ctx: AssignmentExpressionContext): Bytecode[] {
-        const name = ctx.expression(0).getText();
-        const envPos = this.compilerEnv.lookupPosition(name);
-        const type = this.typeEnv.lookupType(name);
-        if (envPos === null) {
-            throw new Error(`Variable ${name} not found in environment, this should not happen`);
-        }
-
-        /*
-        // borrow checker
-        if (type.kind === "readRef") {
-            throw new Error(`Cannot assign to non mutable reference ${name}`);
-        } else if (type.kind === "writeRef") {
-            throw new Error(`Cannot assign to mutable reference ${name}`);
-        } else if (type.kind === "owned") {
-            if (type.readRefs > 0 || type.writeRefs > 0) {
-                throw new Error(`Cannot assign to ${name} because it is borrowed`);
-            }
-        }
-
-        let bytecode = this.visit(ctx.expression(1));
-
-        // transfer ownership of first variable
-        if(type.kind === "owned") {
-            let firstGetVarName: string | null = null;
-            let pos : EnvironmentPosition;
-            for (const instr of bytecode) {
-                if (instr.type === "GET") {
-                    pos = {frameIndex: instr.frameIndex, localIndex: instr.localIndex};
-                    const varName = this.compilerEnv.lookupName(pos);
-                    
-                    if (varName) {
-                        firstGetVarName = varName;
-                        break;
-                    }
-                }
-            }
-            const oldType = this.typeEnv.lookupType(firstGetVarName);
-            if (oldType !== null && oldType.kind === "owned") {
-                oldType.isAlive = false;
-            }
-        }
-
-        bytecode.push(SET(envPos.frameIndex, envPos.localIndex));
-
-        if (!envPos || !type || type.kind === "primitive") {
-            throw new Error(`Cannot use variable ${name}`);
-        }
-
-         // Lifetime Check
-         type.lifetimeCount--;
-         if (type.lifetimeCount === 0) {
-             if(BorrowChecker.freeCheck(name, this.typeEnv)) {
-                 bytecode.push(FREE(envPos.frameIndex, envPos.localIndex));
-             }
-         }
-        */
-
-        return bytecode;
-
     }
 }
