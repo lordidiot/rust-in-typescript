@@ -1,22 +1,28 @@
+import { notStrictEqual } from "assert";
+
 export type Bytecode = 
     | { type: "POP" }
-    | { type: "LDCI", operand: number }
+    | { type: "LDCP", primitive: Value } // Load constant value primitive
     | { type: "ENTER_SCOPE", size: number }
     | { type: "EXIT_SCOPE" }
     | { type: "SET", frameIndex: number, localIndex: number, indirection: number }
     | { type: "GET", frameIndex: number, localIndex: number, indirection: number }
     | { type: "DEREF" }
     | { type: "WRITE" }
+    | { type: "CALL" }
+    | { type: "RET" }
     | { type: "ADD" }
     | { type: "SUB" }
     | { type: "MUL" }
     | { type: "DIV" }
     | { type: "MOD" }
-    | { type: "FREE" , frameIndex: number, localIndex: number}
+    | { type: "FREE", frameIndex: number, localIndex: number}
+    | { type: "JOFR", skip: number } // Jump on false relative
+    | { type: "GOTOR", skip: number} // Goto relative
     | { type: "DONE" }
 
 export const POP = (): Bytecode => ({ type: "POP" });
-export const LDCI = (operand: number): Bytecode => ({ type: "LDCI", operand });
+export const LDCP = (primitive: Value): Bytecode => ({ type: "LDCP", primitive });
 export const ENTER_SCOPE = (size: number): Bytecode => ({ type: "ENTER_SCOPE", size });
 export const EXIT_SCOPE = (): Bytecode => ({ type: "EXIT_SCOPE" });
 export const SET = (frameIndex: number, localIndex: number, indirection: number): Bytecode =>
@@ -25,28 +31,34 @@ export const GET = (frameIndex: number, localIndex: number, indirection: number)
     ({ type: "GET", frameIndex, localIndex, indirection });
 export const DEREF = (): Bytecode => ({ type: "DEREF" });
 export const WRITE = (): Bytecode => ({ type: "WRITE" });
+export const CALL = (): Bytecode => ({ type: "CALL" });
+export const RET = (): Bytecode => ({ type: "RET" });
 export const ADD = (): Bytecode => ({ type: "ADD" });
 export const SUB = (): Bytecode => ({ type: "SUB" });
 export const MUL = (): Bytecode => ({ type: "MUL" });
 export const DIV = (): Bytecode => ({ type: "DIV" });
 export const MOD = (): Bytecode => ({ type: "MOD" });
 export const FREE = (frameIndex: number, localIndex: number): Bytecode => ({ type: "FREE", frameIndex, localIndex});
+export const JOFR = (skip: number): Bytecode => ({ type: "JOFR", skip });
+export const GOTOR = (skip: number): Bytecode => ({ type: "GOTOR", skip });
 export const DONE = (): Bytecode => ({ type: "DONE" });
 
 export class RustVirtualMachine {
     private operandStack: Value[];
+    private runtimeStack: RuntimeFrame[]; // TODO(IMPT): This should be inside the heap
     private bytecode: Bytecode[];
     private pc: number;
     private heap: Heap;
     private heapSize: number;
     private env: Value;
     private isDebug: boolean;
+    private topLevelEnvSize: number;
 
-    constructor(bytecode: Bytecode[], heapSize: number = 1000000, isDebug: boolean = false) {
+    constructor(bytecode: Bytecode[], topLevelEnvSize: number, heapSize: number = 1000000, isDebug: boolean = false) {
         this.bytecode = bytecode;
         this.heapSize = heapSize;
         this.isDebug = isDebug;
-        this.env = Value.fromAddress(0xffffffff) // Invalid address
+        this.topLevelEnvSize = topLevelEnvSize;
     }
 
     private peek(): Value {
@@ -71,8 +83,8 @@ export class RustVirtualMachine {
                 this.operandStack.pop();
                 break;
             }
-            case "LDCI": {
-                this.operandStack.push(Value.fromi32(ins.operand)); // TODO: Handle different types
+            case "LDCP": {
+                this.operandStack.push(ins.primitive); // TODO: Handle different types
                 break;
             }
             case "ENTER_SCOPE": {
@@ -82,7 +94,11 @@ export class RustVirtualMachine {
                 break;
             }
             case "EXIT_SCOPE": {
+                const prevEnv = this.env;
                 this.env = this.heap.getPairFirst(this.env);
+                // TODO
+                // free(this.heap.getPairSecond(prevEnv))
+                // free(prevEnv)
                 break;
             }
             case "SET": {
@@ -136,6 +152,24 @@ export class RustVirtualMachine {
                 this.heap.setValue(address, value);
                 break;
             }
+            case "CALL": {
+                const callPc = this.operandStack.pop()!; // TODO: Check?
+                this.runtimeStack.push({
+                    savedPc: this.pc + 1,
+                    savedEnv: this.env,
+                })
+                return callPc.asu32(); // Change pc directly
+            }
+            case "RET": {
+                const frame = this.runtimeStack.pop()!;
+                while (!this.env.equals(frame.savedEnv)) {
+                    this.env = this.heap.getPairFirst(this.env);
+                    // TODO: Free
+                    // this.heap.free(...);
+                    // this.heap.free(...);
+                }
+                return frame.savedPc;
+            };
             case "ADD": {
                 const b = this.operandStack.pop()!;
                 const a = this.operandStack.pop()!;
@@ -185,6 +219,16 @@ export class RustVirtualMachine {
                 // }
                 break;
             }
+            case "JOFR": {
+                const condition = this.operandStack.pop()!.asBool();
+                if (!condition) { // Jump if false
+                    return this.pc + 1 + ins.skip; // Returns the new program counter
+                }
+                break;
+            }
+            case "GOTOR": {
+                return this.pc + 1 + ins.skip; // Returns the new program counter
+            }
             case "DONE": {
                 throw new Error("Should be unreachable");
             }
@@ -197,12 +241,22 @@ export class RustVirtualMachine {
         this.pc = 0;
         this.heap = new Heap(this.heapSize);
         this.operandStack = [];
-
+        this.runtimeStack = [];
+        this.env = this.heap.allocateEnvironment(
+            Value.fromAddress(0xffffffff), // Invalid address
+            this.topLevelEnvSize
+        );
         while (this.bytecode[this.pc].type !== "DONE") {
             this.pc = this.step();
         }
-        return this.operandStack.pop()!.asi32();
+        return 0;
+        // return this.operandStack.pop()!.asi32();
     }
+}
+
+type RuntimeFrame = {
+    savedPc: number;
+    savedEnv: Value;
 }
 
 // Defintion
@@ -232,6 +286,10 @@ export class Value {
         return new Value(Value.ADDRESS_TAG, value);
     }
 
+    static fromBool(value: boolean): Value {
+        return new Value(Value.PRIMITIVE_TAG, value ? 1 : 0);
+    }
+
     constructor(tag: number, value: number) {
         this.tag = tag;
         this.value = value;
@@ -259,6 +317,10 @@ export class Value {
         return this.value;
     }
 
+    asBool(): boolean {
+        return this.value !== 0;
+    }
+
     getTag(): number {
         return this.tag;
     }
@@ -279,6 +341,10 @@ export class Value {
         } else {
             return `[invalid]`;
         }
+    }
+
+    equals(other: Value): boolean {
+        return this.tag === other.tag && this.value === other.value;
     }
 }
 

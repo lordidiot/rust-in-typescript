@@ -16,11 +16,6 @@ export class RustEvaluator extends BasicEvaluator {
         this.compilerVisitor = new RustCompilerVisitor();
     }
 
-    compile(tree: ParseTree): Bytecode[] {
-        this.compilerVisitor.visit(tree);
-        return this.compilerVisitor.bytecode.concat([DONE()]); // TODO: Fixup api
-    }
-
     async evaluateChunk(chunk: string): Promise<void> {
         try {
             // Create the lexer and parser
@@ -30,25 +25,31 @@ export class RustEvaluator extends BasicEvaluator {
             const parser = new RustParser(tokenStream);
 
             // Type check
-            const tree = parser.blockExpression();
+            const tree = parser.crate();
+            if (this.isDebug) {
+                // console.log(prettyPrint(tree.toStringTree(parser)));
+            }
             const typeCheckVisitor = new RustTypeCheckerVisitor();
             typeCheckVisitor.visit(tree);
 
             //Borrow Check
-            const usageMap = countVariableUsages(tree);
-            const borrowCheckerVisitor = new BorrowCheckingVisitor(usageMap);
-            borrowCheckerVisitor.visit(tree);
+            // const usageMap = countVariableUsages(tree);
+            // const borrowCheckerVisitor = new BorrowCheckingVisitor(usageMap);
+            // borrowCheckerVisitor.visit(tree);
             
             // Compile
             if (this.isDebug) {
                 console.log(prettyPrint(tree.toStringTree(parser)));
             }
-            const bytecode = this.compile(tree);
+            this.compilerVisitor.visit(tree);
+            const bytecode = this.compilerVisitor.bytecode;
+            const topLevelEnvSize = this.compilerVisitor.compilerEnv.locals.length;
+
 
             // Run the bytecode
-            const vm = new RustVirtualMachine(bytecode, 1000000, this.isDebug);
-            if (this.isDebug) {
-                console.log("Bytecode:", bytecode);
+            const vm = new RustVirtualMachine(bytecode, topLevelEnvSize, 1000000, this.isDebug);            if (this.isDebug) {
+                console.log("Bytecode:");
+                prettyPrintBytecode(bytecode);
             }
             const result = vm.run();
 
@@ -107,4 +108,10 @@ function prettyPrint(input: string): string {
     }
     
     return format(parsed, 0);
+}
+
+function prettyPrintBytecode(bytecode: Bytecode[]) {
+    bytecode.forEach((inst, idx) => {
+        console.log("\t", idx, inst)
+    })
 }
