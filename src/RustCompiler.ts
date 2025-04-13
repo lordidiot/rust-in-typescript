@@ -1000,7 +1000,8 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         }
         this.withNewEnvironment(ctx, () => {
             // Pop arguments in reversed-order
-            fnType.paramNames.toReversed().forEach((name: string) => {
+            const reversedParams = [...fnType.paramNames].reverse();
+            reversedParams.forEach((name: string) => {
                 const envPos = this.compilerEnv.lookupPosition(name);
                 this.bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0));
                 this.bytecode.push(POP());
