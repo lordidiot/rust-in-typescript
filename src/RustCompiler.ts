@@ -1,7 +1,7 @@
-import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, DereferenceExpressionContext, ExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
+import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree, TerminalNode } from "antlr4ng";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, DereferenceExpressionContext, ExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
-import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE } from "./RustVirtualMachine";
+import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
@@ -9,12 +9,16 @@ declare module "antlr4ng" {
     interface ParserRuleContext {
         type?: RustType;
     }
+
+    interface ParseTree {
+        type?: RustType;
+    }
 }
 
 const UNIT_TYPE = "()"
 interface Ref { kind: "ref"; target: RustType; }
 interface MutRef { kind: "mutRef"; target: RustType; }
-type PrimitiveType = "i32" | "u32" | "()";
+type PrimitiveType = "i32" | "u32" | "()" | "bool";
 type RustType =
   | PrimitiveType 
   | Ref
@@ -185,6 +189,30 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         this.typeEnv = new TypeEnvironment();
     }
 
+    private getNonTokenChildren(node: ParseTree): ParseTree[] {
+        let children: ParseTree[] = [];
+        for (let i = 0; i < node.getChildCount(); i++) {
+            const child = node.getChild(i);
+            if (!(child instanceof TerminalNode)) {
+                children.push(child);
+            }
+        }
+        return children;
+    }
+
+    visitChildren(node: ParseTree): RustType {
+        super.visitChildren(node);
+        const children = this.getNonTokenChildren(node);
+        if (children.length === 1) {
+            node.type = children[0].type;
+            return node.type;
+        } else {
+            console.log(node);
+            throw new Error(`Unimplemented: ${node.getText()}`);
+        }
+        return null;
+    }
+
     private withNewEnvironment(ctx: ParserRuleContext, fn: () => RustType): RustType {
         // TODO: Error on duplicate variable names
         const usageMap = countVariableUsages(ctx);
@@ -203,24 +231,30 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         const leftType = this.visit(ctx.getChild(0));
         const rightType = this.visit(ctx.getChild(2));
         if (!typeEqual(leftType, rightType)) {
+            console.log("context", ctx.getText());
             throw new Error(`Type error: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)} are not compatible. Line ${ctx.start.line}`);
         }
         ctx.type = leftType;
         return ctx.type;
     }
 
+    visitStatements(ctx: StatementsContext): RustType {
+        if (ctx.statement() !== null) {
+            ctx.statement().forEach((statement: StatementContext) => {
+                this.visit(statement);
+            });
+        }
+        if (ctx.expression() !== null) {
+            ctx.type = this.visit(ctx.expression());
+        } else {
+            ctx.type = UNIT_TYPE;
+        }
+        return ctx.type;
+    }
+
     visitBlockExpression(ctx: BlockExpressionContext): RustType {
         return this.withNewEnvironment(ctx, () => {
-            this.visitChildren(ctx); // Type check all children
-            if (ctx.statements() === null) {
-                ctx.type = UNIT_TYPE;
-                return ctx.type;
-            }
-            if (ctx.statements().expression() !== null) {
-                ctx.type = ctx.statements().expression().type;
-                return ctx.type;
-            }
-            ctx.type = UNIT_TYPE;
+            ctx.type = this.visit(ctx.statements());
             return ctx.type;
         });
     }
@@ -243,6 +277,9 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
     visitLiteralExpression(ctx: LiteralExpressionContext): RustType {
         if (ctx.INTEGER_LITERAL()) { // TODO: Could be u32
             ctx.type = "i32";
+            return ctx.type;
+        } else if (ctx.KW_TRUE() || ctx.KW_FALSE()) {
+            ctx.type = "bool";
             return ctx.type;
         }
         throw new Error("Not implemented (visitLiteralExpression)");
@@ -283,7 +320,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         }
         const leftType = this.visit(ctx.getChild(0));
         const rightType = this.visit(ctx.getChild(2));
-        if (typeEqual(leftType, rightType)) {
+        if (!typeEqual(leftType, rightType)) {
             throw new Error(`mismatched types.\n Debug: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)}. Line ${ctx.start.line}`);
         }
         ctx.type = UNIT_TYPE;
@@ -306,6 +343,27 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
             return ctx.type;
         }
         throw new Error(`type ${expressionType} cannot be dereferenced. Line ${ctx.start.line}`);
+    }
+
+    visitIfExpression(ctx: IfExpressionContext): RustType {
+        const conditionType = this.visit(ctx.expression());
+        if (!typeEqual(conditionType, "bool")) {
+            throw new Error(`mismatched types, expected \`bool\`, found ${conditionType}. Line ${ctx.start.line}`);
+        }
+        let types = [];
+        for (const block of ctx.blockExpression()) {
+            types.push(this.visit(block));
+        }
+        if (ctx.ifExpression() !== null) { // `else if` branch
+            types.push(this.visit(ctx.ifExpression()));
+        }
+        for (let i = 1; i < types.length; i++) {
+            if (!typeEqual(types[i], types[0])) {
+                throw new Error(`\`if\` and \`else\` have incompatible types. Line ${ctx.start.line}`);
+            }
+        }
+        ctx.type = types[0];
+        return ctx.type;
     }
 }
 
@@ -364,9 +422,7 @@ class CompilerEnvironment {
         
         return currentEnv.locals[pos.localIndex];
     }
- }
-
-
+}
 
 class BorrowChecker {
     static borrowCheck(name: string, env: TypeEnvironment) {
@@ -448,6 +504,13 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         this.bytecode = [];
     }
 
+    private visitAndGetBytecodeSize(tree: ParseTree): number {
+        const pre = this.bytecode.length;
+        this.visit(tree);
+        const post = this.bytecode.length;
+        return post - pre;
+    }
+
     private withNewEnvironment(ctx: ParserRuleContext, fn: () => void): void {
         // TODO: Error on duplicate variable names
         const usageMap = countVariableUsages(ctx);
@@ -499,7 +562,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
     }
 
     private visitLValueExpression(ctx: ExpressionContext): void {
-        if (ctx instanceof PathExpressionContext) {
+        if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
             const name = ctx.getText();
             const envPos = this.compilerEnv.lookupPosition(name);
             const type = this.typeEnv.lookupType(name);
@@ -511,6 +574,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
             this.visitLValueExpression(ctx.expression());
             this.bytecode.push(DEREF());
         } else {
+            console.log(ctx);
             throw new Error(`Invalid left-hand side of assignment: ${ctx.getText()}`);
         }
     }
@@ -568,10 +632,40 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
 
     visitLiteralExpression(ctx: LiteralExpressionContext): void {
         if (ctx.INTEGER_LITERAL()) {
-            const value = parseInt(ctx.INTEGER_LITERAL().getText(), 10);
-            this.bytecode.push(LDCI(value));
+            const int = parseInt(ctx.INTEGER_LITERAL().getText(), 10);
+            const value = Value.fromi32(int);
+            this.bytecode.push(LDCP(value));
+            return;
+        } else if (ctx.KW_TRUE()) {
+            this.bytecode.push(LDCP(Value.fromBool(true)));
+            return;
+        } else if (ctx.KW_FALSE()) {
+            this.bytecode.push(LDCP(Value.fromBool(false)));
             return;
         }
         throw new Error("Not implemented (visitLiteralExpression)");
+    }
+
+    visitIfExpression(ctx: IfExpressionContext): void {
+        this.visit(ctx.expression());
+        const jofr = JOFR(0);
+        const gotor = GOTOR(0);
+        if (jofr.type !== "JOFR" || gotor.type !== "GOTOR") {
+            throw new Error("This never happens"); // For type assertion
+        }
+        this.bytecode.push(jofr);
+        let ifBranchSize = this.visitAndGetBytecodeSize(ctx.blockExpression(0));
+        if (ctx.KW_ELSE()) {
+            let elseBranchSize;
+            ifBranchSize += 1; // For the GOTOR
+            this.bytecode.push(gotor);
+            if (ctx.ifExpression() !== null) {
+                elseBranchSize = this.visitAndGetBytecodeSize(ctx.ifExpression());
+            } else {
+                elseBranchSize = this.visitAndGetBytecodeSize(ctx.blockExpression(1));
+            }
+            gotor.skip = elseBranchSize;
+        }
+        jofr.skip = ifBranchSize;
     }
 }

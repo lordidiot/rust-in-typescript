@@ -503,6 +503,7 @@ compoundAssignOperator
     | SHREQ
     ;
 
+// TODO: Remove some of these soon
 expressionWithBlock
     : outerAttribute+ expressionWithBlock // technical
     | blockExpression
@@ -676,7 +677,7 @@ loopLabel
 
 // 8.2.15
 ifExpression
-    : KW_IF expression blockExpression (KW_ELSE (blockExpression | ifExpression | ifLetExpression))?
+    : KW_IF expression blockExpression (KW_ELSE (blockExpression | ifExpression))?
     ;
 
 ifLetExpression
