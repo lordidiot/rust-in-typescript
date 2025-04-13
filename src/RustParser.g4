@@ -31,8 +31,13 @@ options
 
 // entry point
 // 4
+/*
 crate
     : innerAttribute* item* EOF
+    ;
+*/
+crate
+    : function_* EOF
     ;
 
 // 3
@@ -193,10 +198,7 @@ useTree
 
 // 6.4
 function_
-    : functionQualifiers KW_FN identifier genericParams? LPAREN functionParameters? RPAREN functionReturnType? whereClause? (
-        blockExpression
-        | SEMI
-    )
+    : KW_FN identifier LPAREN functionParameters? RPAREN functionReturnType? blockExpression
     ;
 
 functionQualifiers
@@ -209,8 +211,7 @@ abi
     ;
 
 functionParameters
-    : selfParam COMMA?
-    | (selfParam COMMA)? functionParam (COMMA functionParam)* COMMA?
+    : functionParam (COMMA functionParam)* COMMA?
     ;
 
 selfParam
@@ -226,7 +227,7 @@ typedSelf
     ;
 
 functionParam
-    : outerAttribute* (functionParamPattern | DOTDOTDOT | type_)
+    : identifier COLON type_
     ;
 
 functionParamPattern
@@ -421,10 +422,9 @@ attrInput
 // 8
 statement
     : SEMI
-    | item
+    | function_
     | letStatement
     | expressionStatement
-    | macroInvocationSemi
     ;
 
 // Changed: type annotations are compulsory
@@ -537,7 +537,7 @@ pathExpression
 
 // 8.2.3
 blockExpression
-    : LCURLYBRACE innerAttribute* statements? RCURLYBRACE
+    : LCURLYBRACE statements? RCURLYBRACE
     ;
 
 statements

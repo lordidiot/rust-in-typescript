@@ -1,7 +1,7 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree, TerminalNode } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, DereferenceExpressionContext, ExpressionContext, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, CallExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
-import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR } from "./RustVirtualMachine";
+import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
@@ -18,8 +18,10 @@ declare module "antlr4ng" {
 const UNIT_TYPE = "()"
 interface Ref { kind: "ref"; target: RustType; }
 interface MutRef { kind: "mutRef"; target: RustType; }
+type FnType = { kind: "fn"; paramNames: string[], paramTypes: RustType[]; ret: RustType };
 type PrimitiveType = "i32" | "u32" | "()" | "bool";
 type RustType =
+  | FnType
   | PrimitiveType 
   | Ref
   | MutRef;
@@ -31,13 +33,29 @@ function typeEqual(a: RustType, b: RustType): boolean {
     } else if (typeof a === "string" || typeof b === "string") {
         return false;
     } else {
-        return a.kind === b.kind && typeEqual(a.target, b.target);
+        if (a.kind !== b.kind) return false;
+        if (a.kind === "fn" && b.kind === "fn") { // Second comparison redundant, but for TS
+            if (a.paramTypes.length !== b.paramTypes.length) return false;
+            for (let i = 0; i < a.paramTypes.length; i++) {
+                if (!typeEqual(a.paramTypes[i], b.paramTypes[i])) return false;
+            }
+            if (!typeEqual(a.ret, b.ret)) return false;
+            return true;
+        } else { // Ref, MutRef
+            // @ts-ignore
+            return typeEqual(a.target, b.target);
+        }
     }
 }
 
 function isPrimitive(type: RustType): type is PrimitiveType {
     return typeof type === "string";
 }
+
+function isRef(type: RustType): type is Ref | MutRef {
+    return !isPrimitive(type) && (type.kind === "ref" || type.kind === "mutRef");
+}
+
 
 function isCopySemantics(type: RustType): boolean {
     // Only primitive types (i32, u32, and unit)
@@ -68,7 +86,6 @@ function countVariableUsages(ctx: ParseTree): UsageMap {
     return map;
 }
 
-
 type ScanResults = {
     names: string[];
     types: RustType[];
@@ -98,6 +115,26 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
         }
         return aggregate;
     };
+
+    visitFunction_(ctx: Function_Context): ScanResults {
+        const fnName = ctx.identifier().getText();
+        let paramNames = [];
+        let paramTypes = [];
+        if (ctx.functionParameters() !== null) {
+            ctx.functionParameters().functionParam().forEach((param) => {
+                paramNames.push(param.identifier().getText());
+                paramTypes.push(this.parseType(param.type_()));
+            });
+        }
+        const returnType =
+            ctx.functionReturnType() !== null
+            ? this.parseType(ctx.functionReturnType().type_())
+            : UNIT_TYPE;
+        return {
+            names: [fnName],
+            types: [{ kind: "fn", paramNames, paramTypes, ret: returnType }]
+        }
+    }
 
     visitBlockExpression(ctx: BlockExpressionContext): ScanResults {
         if (ctx !== this.selfContext) {
@@ -166,6 +203,9 @@ class TypeEnvironment {
                 this.types.set(locals.names[i], locals.types[i]);
             }
         }
+        // Debug
+        // console.log("New type environment");
+        // console.log(this.types);
     }
 
     extend(locals: ScanResults): TypeEnvironment {
@@ -186,7 +226,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     constructor() {
         super();
-        this.typeEnv = new TypeEnvironment();
+        // this.typeEnv = new TypeEnvironment();
     }
 
     private getNonTokenChildren(node: ParseTree): ParseTree[] {
@@ -210,13 +250,14 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
             console.log(node);
             throw new Error(`Unimplemented: ${node.getText()}`);
         }
-        return null;
     }
 
-    private withNewEnvironment(ctx: ParserRuleContext, fn: () => RustType): RustType {
+    private withNewEnvironment(ctx: ParserRuleContext, fn: () => RustType, scanResults: ScanResults = null): RustType {
         // TODO: Error on duplicate variable names
-        const usageMap = countVariableUsages(ctx);
-        const scanResults = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        if (scanResults === null) {
+            const usageMap = countVariableUsages(ctx);
+            scanResults = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        }
         const previousEnv = this.typeEnv;
         this.typeEnv = this.typeEnv.extend(scanResults);
         
@@ -225,6 +266,58 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         } finally {
             this.typeEnv = previousEnv;
         }
+    }
+
+    visitCrate(ctx: CrateContext): RustType {
+        const usageMap = new Map();
+        const scanResults = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        // Crate-level scope type environment
+        this.typeEnv = new TypeEnvironment(scanResults);
+        ctx.function_().forEach((fn: Function_Context) => {
+            this.visit(fn);
+        });
+        ctx.type = UNIT_TYPE;
+        return ctx.type;
+    }
+
+    visitFunction_(ctx: Function_Context): RustType {
+        const name = ctx.identifier().getText();
+        const fnType = this.typeEnv.lookupType(name);
+        if (typeof fnType === "string" || fnType.kind !== "fn") {
+            throw new Error(`Something wrong, expected function type, found ${JSON.stringify(fnType)}. Line ${ctx.start.line}`);
+        }
+        const bodyType = this.withNewEnvironment(ctx, () => {
+            return this.visit(ctx.blockExpression());
+        }, { // Custom scanResults
+            names: fnType.paramNames,
+            types: fnType.paramTypes
+        });
+        if (!typeEqual(bodyType, fnType.ret)) {
+            throw new Error(`mismatched types, expected ${JSON.stringify(fnType.ret)}, found ${JSON.stringify(bodyType)}. Line ${ctx.start.line}`);
+        }
+        ctx.type = UNIT_TYPE;
+        return ctx.type;
+    }
+
+    visitCallExpression(ctx: CallExpressionContext): RustType {
+        let fnType = this.visit(ctx.expression());
+        if (typeof fnType === "string" || fnType.kind !== "fn") {
+            throw new Error(`expected function, found ${JSON.stringify(fnType)}. Line ${ctx.start.line}`);
+        }
+        const argTypes =
+            ctx.callParams() !== null
+            ? ctx.callParams().expression().map((expr) => this.visit(expr))
+            : [];
+        if (argTypes.length !== fnType.paramTypes.length) {
+            throw new Error(`this function takes ${fnType.paramTypes.length} arguments but ${argTypes.length} were supplied. Line ${ctx.start.line}`);
+        }
+        for (let i = 0; i < argTypes.length; i++) {
+            if (!typeEqual(argTypes[i], fnType.paramTypes[i])) {
+                throw new Error(`mismatched types, expected ${JSON.stringify(fnType.paramTypes[i])}, found ${JSON.stringify(argTypes[i])}. Line ${ctx.start.line}`);
+            }
+        }
+        ctx.type = fnType.ret;
+        return ctx.type;
     }
 
     visitArithmeticOrLogicalExpression(ctx: ArithmeticOrLogicalExpressionContext): RustType {
@@ -338,7 +431,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     visitDereferenceExpression(ctx: DereferenceExpressionContext): RustType {
         const expressionType = this.visit(ctx.expression());
-        if (!isPrimitive(expressionType)) {
+        if (isRef(expressionType)) {
             ctx.type = expressionType.target;
             return ctx.type;
         }
@@ -491,7 +584,6 @@ class BorrowChecker {
 
 }
 
-
 export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implements RustParserVisitor<void> {
     compilerEnv: CompilerEnvironment;
     typeEnv: TypeEnvironment;
@@ -499,8 +591,8 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
 
     constructor() {
         super();
-        this.compilerEnv = new CompilerEnvironment();
-        this.typeEnv = new TypeEnvironment();
+        // this.compilerEnv = new CompilerEnvironment();
+        // this.typeEnv = new TypeEnvironment();
         this.bytecode = [];
     }
 
@@ -511,10 +603,12 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         return post - pre;
     }
 
-    private withNewEnvironment(ctx: ParserRuleContext, fn: () => void): void {
+    private withNewEnvironment(ctx: ParserRuleContext, fn: () => void, scanResults: ScanResults = null): void {
         // TODO: Error on duplicate variable names
-        const usageMap = countVariableUsages(ctx);
-        const scanResults  = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        if (scanResults === null) {
+            const usageMap = countVariableUsages(ctx);
+            scanResults  = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        }
         const previousEnv = this.compilerEnv;
         const prevTypes = this.typeEnv;
 
@@ -531,8 +625,71 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         }
     }
 
+    visitCrate(ctx: CrateContext): void {
+        const usageMap = new Map();
+        const scanResults = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        // Crate-level scope environment
+        this.compilerEnv = new CompilerEnvironment(null, scanResults.names);
+        this.typeEnv = new TypeEnvironment(scanResults);
+        ctx.function_().forEach((fn: Function_Context) => {
+            this.visit(fn);
+        });
+        // Every program starts by calling main()
+        const mainEnvPos = this.compilerEnv.lookupPosition("main");
+        if (mainEnvPos === null) { // TODO: In type checker too
+            throw new Error(`Main function not found`);
+        }
+        this.bytecode.push(GET(mainEnvPos.frameIndex, mainEnvPos.localIndex, 0));
+        this.bytecode.push(CALL());
+        this.bytecode.push(DONE());
+    }
+
+    visitFunction_(ctx: Function_Context): void {
+        const gotor = GOTOR(0);
+        if (gotor.type !== "GOTOR") throw new Error("This never happens"); // For type assertion
+        this.bytecode.push(gotor);
+        const fnAddress = this.bytecode.length;
+        const name = ctx.identifier().getText();
+        const fnType = this.typeEnv.lookupType(name);
+        if (isPrimitive(fnType) || fnType.kind !== "fn") {
+            throw new Error(`Something wrong, expected function type, found ${JSON.stringify(fnType)}. Line ${ctx.start.line}`);
+        }
+        this.withNewEnvironment(ctx, () => {
+            // Pop arguments in reversed-order
+            fnType.paramNames.toReversed().forEach((name: string) => {
+                const envPos = this.compilerEnv.lookupPosition(name);
+                this.bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0));
+                this.bytecode.push(POP());
+            });
+            this.visit(ctx.blockExpression());
+        }, {
+            names: fnType.paramNames,
+            types: fnType.paramTypes
+        });
+        this.bytecode.push(RET());
+        const fnSize = this.bytecode.length - fnAddress;
+        gotor.skip = fnSize;
+        const envPos = this.compilerEnv.lookupPosition(name);
+        if (envPos === null) {
+            throw new Error(`Function ${name} not found in environment, this should not happen`);
+        }
+        this.bytecode.push(LDCP(Value.fromu32(fnAddress)));
+        this.bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0));
+        this.bytecode.push(POP());
+    }
+
+    visitCallExpression(ctx: CallExpressionContext): void {
+        if (ctx.callParams() !== null) {
+            ctx.callParams().expression().forEach((expr: ExpressionContext) => {
+                this.visit(expr);
+            });
+        }
+        this.visit(ctx.expression());
+        this.bytecode.push(CALL());
+    }
+
     visitBlockExpression(ctx: BlockExpressionContext): void {
-        return this.withNewEnvironment(ctx, () => {
+        this.withNewEnvironment(ctx, () => {
             return this.visitChildren(ctx);
         });
     }
