@@ -4,7 +4,7 @@ import { RustLexer } from "./parser/src/RustLexer";
 import { RustParser } from "./parser/src/RustParser";
 import { CharStream, CommonTokenStream, ParseTree } from "antlr4ng";
 import { Bytecode, DONE, RustVirtualMachine } from "./RustVirtualMachine";
-import { RustCompilerVisitor, RustTypeCheckerVisitor } from "./RustCompiler";
+import { RustCompilerVisitor, RustTypeCheckerVisitor, countVariableUsages, BorrowCheckingVisitor } from "./RustCompiler";
 
 export class RustEvaluator extends BasicEvaluator {
     private compilerVisitor: RustCompilerVisitor;
@@ -33,10 +33,15 @@ export class RustEvaluator extends BasicEvaluator {
             const tree = parser.blockExpression();
             const typeCheckVisitor = new RustTypeCheckerVisitor();
             typeCheckVisitor.visit(tree);
+
+            //Borrow Check
+            const usageMap = countVariableUsages(tree);
+            const borrowCheckerVisitor = new BorrowCheckingVisitor(usageMap);
+            borrowCheckerVisitor.visit(tree);
             
             // Compile
             if (this.isDebug) {
-                // console.log(prettyPrint(tree.toStringTree(parser)));
+                console.log(prettyPrint(tree.toStringTree(parser)));
             }
             const bytecode = this.compile(tree);
 

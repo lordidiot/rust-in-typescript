@@ -1,5 +1,6 @@
 {
     let x: i32 = 5;
-    x = 10;
-    x
+    let y: &i32 = &x;
+    let z: &i32 = y;
+    z
 }

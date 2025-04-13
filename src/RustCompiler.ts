@@ -3,6 +3,8 @@ import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, Bloc
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
 import { Bytecode, ADD, SUB, MUL, DIV, MOD, LDCI, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
+import { Context } from "vm";
+import { stringify } from "querystring";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
 declare module "antlr4ng" {
@@ -16,9 +18,9 @@ interface Ref { kind: "ref"; target: RustType; }
 interface MutRef { kind: "mutRef"; target: RustType; }
 type PrimitiveType = "i32" | "u32" | "()";
 type RustType =
-  | PrimitiveType 
-  | Ref
-  | MutRef;
+    | PrimitiveType
+    | Ref
+    | MutRef;
 
 function typeEqual(a: RustType, b: RustType): boolean {
     if (a === b) return true;
@@ -45,25 +47,6 @@ function isMoveSemantics(type: RustType): boolean {
     return !isCopySemantics(type);
 }
 
-type UsageMap = Map<string, number>;
-
-function countVariableUsages(ctx: ParseTree): UsageMap {
-    const map = new Map<string, number>();
-
-    function visit(node: ParseTree) {
-        if (node instanceof PathExpressionContext) {
-            const name = node.getText();
-            map.set(name, (map.get(name) ?? 0) + 1);
-        }
-        for (let i = 0; i < node.getChildCount(); i++) {
-            visit(node.getChild(i));
-        }
-    }
-
-    visit(ctx);
-    return map;
-}
-
 
 type ScanResults = {
     names: string[];
@@ -73,12 +56,10 @@ const EMPTY_SCAN_RESULTS: ScanResults = { names: [], types: [] };
 
 class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implements RustParserVisitor<ScanResults> {
     selfContext: ParserRuleContext;
-    usageMap: UsageMap;
 
-    constructor(selfContext: ParserRuleContext, usageMap: UsageMap) {
+    constructor(selfContext: ParserRuleContext) {
         super();
         this.selfContext = selfContext;
-        this.usageMap = usageMap;
     }
 
     defaultResult(): ScanResults {
@@ -187,11 +168,10 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     private withNewEnvironment(ctx: ParserRuleContext, fn: () => RustType): RustType {
         // TODO: Error on duplicate variable names
-        const usageMap = countVariableUsages(ctx);
-        const scanResults = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        const scanResults = new LocalScannerVisitor(ctx).visit(ctx);
         const previousEnv = this.typeEnv;
         this.typeEnv = this.typeEnv.extend(scanResults);
-        
+
         try {
             return fn();
         } finally {
@@ -277,13 +257,13 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         return ctx.type;
     }
 
-    visitAssignmentExpression(ctx: AssignmentExpressionContext) : RustType {
+    visitAssignmentExpression(ctx: AssignmentExpressionContext): RustType {
         if (!this.isLValue(ctx.expression(0))) {
             throw new Error(`invalid left-hand side of assignment: ${ctx.expression(0).getText()}`);
         }
         const leftType = this.visit(ctx.getChild(0));
         const rightType = this.visit(ctx.getChild(2));
-        if (typeEqual(leftType, rightType)) {
+        if (!typeEqual(leftType, rightType)) {
             throw new Error(`mismatched types.\n Debug: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)}. Line ${ctx.start.line}`);
         }
         ctx.type = UNIT_TYPE;
@@ -308,6 +288,441 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         throw new Error(`type ${expressionType} cannot be dereferenced. Line ${ctx.start.line}`);
     }
 }
+
+type LVal =
+    | { kind: "var", name: string }
+    | { kind: "deref", inner: LVal };
+
+type BorrowType =
+    | PrimitiveType
+    | { kind: "box", inner: BorrowType }
+    | { kind: "ref", target: LVal }
+    | { kind: "mutRef", target: LVal }
+    | "dangling";
+
+type BorrowTypeEntry = { type: BorrowType; lifetime: number };
+type BorrowMap = Map<string, BorrowTypeEntry>;
+
+function root(w: LVal): string {
+    return w.kind === "var" ? w.name : root(w.inner);
+}
+
+function full(t: BorrowType): boolean {
+    if (t === "dangling") return false;
+    if (typeof t === "string") return true;
+    if (t.kind === "box") return full(t.inner);
+    return true;
+}
+
+function readProhibited(w: LVal, τ: BorrowMap): boolean {
+    const r = root(w);
+    for (const entry of τ.values()) {
+        const t = entry.type;
+        if (t !== "dangling" && typeof t !== "string" && t.kind === "mutRef" && root(t.target) === r) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function writeProhibited(w: LVal, τ: BorrowMap): boolean {
+    const r = root(w);
+    for (const entry of τ.values()) {
+        const t = entry.type;
+        if (t !== "dangling" && typeof t !== "string" && (t.kind === "ref" || t.kind === "mutRef") && root(t.target) === r) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function typeLVal(w: LVal, τ: BorrowMap): BorrowTypeEntry | undefined {
+    if (w.kind === "var") {
+        return τ.get(w.name);
+    }
+    const inner = typeLVal(w.inner, τ);
+    if (!inner) return undefined;
+    const t = inner.type;
+    if (t === "dangling" || typeof t === "string") return undefined;
+    if (t.kind === "ref" || t.kind === "mutRef") {
+        return typeLVal(t.target, τ);
+    }
+    if (t.kind === "box") {
+        return { type: t.inner, lifetime: inner.lifetime };
+    }
+    return undefined;
+}
+
+class FeatherweightBorrowChecker {
+    τ: BorrowMap;
+
+    constructor() {
+        this.τ = new Map();
+    }
+
+    declareVariable(name: string, type: BorrowType, lifetime: number): void {
+        if (this.τ.has(name)) {
+            throw new Error(`Variable ${name} already declared`);
+        }
+        this.τ.set(name, { type, lifetime: lifetime ? lifetime + 1 : 1 });
+        this.decrementAndCheck(name);
+    }
+
+    use(w: LVal): void {
+        const entry = typeLVal(w, this.τ);
+        if (!entry) throw new Error(`Use of undefined or unresolvable value: ${JSON.stringify(w)}`);
+        if (entry.type === "dangling") throw new Error(`Use after move detected`);
+        
+    }
+
+    immBorrow(w: LVal): BorrowType {
+        const entry = typeLVal(w, this.τ);
+        if (!entry) throw new Error(`Cannot borrow undefined value`);
+        if (!full(entry.type)) throw new Error(`Cannot borrow from non-full type`);
+        if (readProhibited(w, this.τ)) {
+            throw new Error(`Shared borrow prohibited due to active mutable borrow of ${root(w)}`);
+        }
+        return { kind: "ref", target: w };
+    }
+
+    mutBorrow(w: LVal): BorrowType {
+        const entry = typeLVal(w, this.τ);
+        if (!entry) throw new Error(`Cannot borrow undefined value`);
+        if (!full(entry.type)) throw new Error(`Cannot borrow from non-full type`);
+        if (writeProhibited(w, this.τ)) {
+            throw new Error(`Mutable borrow prohibited due to active borrow of ${root(w)}`);
+        }
+        return { kind: "mutRef", target: w };
+    }
+
+    move(w: LVal): BorrowType {
+        const entry = typeLVal(w, this.τ);
+        if (!entry) throw new Error(`Cannot move from undefined value`);
+        if (writeProhibited(w, this.τ)) {
+            throw new Error(`Move prohibited due to existing borrows of ${root(w)}`);
+        }
+        const r = root(w);
+        this.τ.set(r, { type: "dangling", lifetime: entry.lifetime });
+        return entry.type;
+    }
+
+    decrementAndCheck(name: string): void {
+        const entry = this.τ.get(name);
+        if (!entry) return;
+
+        // Only decrement if not already dangling
+        if (entry.type !== "dangling") {
+            entry.lifetime--;
+
+            // Check if we should transition to dangling
+            if (entry.lifetime <= 0) {
+                this.maybeTransitionToDangling(name);
+            }
+        }
+    }
+
+    private maybeTransitionToDangling(name: string): void {
+        const entry = this.τ.get(name);
+        if (!entry || entry.type === "dangling") return;
+
+        // Check if any active borrows exist for this value
+        const hasActiveBorrows = Array.from(this.τ.values()).some(otherEntry => {
+            const t = otherEntry.type;
+            return t !== "dangling" &&
+                typeof t !== "string" &&
+                (t.kind === "ref" || t.kind === "mutRef") &&
+                root(t.target) === name;
+        });
+
+        if (!hasActiveBorrows) {
+            // Mark as dangling and check parent if this was a borrow
+            const oldType = entry.type;
+            this.τ.set(name, { type: "dangling", lifetime: 0 });
+
+            // If this was a borrow, check its parent
+            if (typeof oldType !== "string" && (oldType.kind === "ref" || oldType.kind === "mutRef")) {
+                const parentName = root(oldType.target);
+                this.checkParentLifetime(parentName);
+            }
+        }
+    }
+
+    private checkParentLifetime(parentName: string): void {
+        const parentEntry = this.τ.get(parentName);
+        if (!parentEntry || parentEntry.type === "dangling") return;
+
+        // Check if parent has any remaining borrows
+        const hasOtherBorrows = Array.from(this.τ.values()).some(otherEntry => {
+            if (otherEntry.type === "dangling" || typeof otherEntry.type === "string") return false;
+            return (otherEntry.type.kind === "ref" || otherEntry.type.kind === "mutRef") &&
+                root(otherEntry.type.target) === parentName;
+        });
+
+        // If no other borrows exist and parent's lifetime is expired
+        if (!hasOtherBorrows && parentEntry.lifetime <= 0) {
+            this.τ.set(parentName, { type: "dangling", lifetime: 0 });
+        }
+    }
+
+
+    exitScope(names: string[]): void {
+        for (const name of names) {
+            const entry = this.τ.get(name);
+            if (!entry || entry.type === "dangling") continue;
+
+            // Check for active borrows
+            const hasActiveBorrows = Array.from(this.τ.entries()).some(([otherName, otherEntry]) => {
+                if (otherName === name) return false;
+                const t = otherEntry.type;
+                return t !== "dangling" &&
+                    typeof t !== "string" &&
+                    (t.kind === "ref" || t.kind === "mutRef") &&
+                    root(t.target) === name;
+            });
+
+            if (hasActiveBorrows) {
+                throw new Error(`Cannot drop ${name} - still referenced by active borrows`);
+            }
+
+            const oldType = entry.type;
+            this.τ.delete(name);
+
+            // If this was a borrow, check its parent
+            if (typeof oldType !== "string" && (oldType.kind === "ref" || oldType.kind === "mutRef")) {
+                const parentName = root(oldType.target);
+                this.checkParentLifetime(parentName);
+            }
+        }
+    }
+}
+
+type UsageMap = Map<string, number>;
+
+export function countVariableUsages(ctx: ParseTree): UsageMap {
+    const map = new Map<string, number>();
+
+    function visit(node: ParseTree) {
+        if (node instanceof PathExpressionContext) {
+            const name = node.getText();
+            map.set(name, (map.get(name) ?? 0) + 1);
+        }
+        for (let i = 0; i < node.getChildCount(); i++) {
+            visit(node.getChild(i));
+        }
+    }
+
+    visit(ctx);
+    return map;
+}
+
+
+export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implements RustParserVisitor<void> {
+    private checker: FeatherweightBorrowChecker = new FeatherweightBorrowChecker();
+    private errors: string[] = [];
+    usage: UsageMap
+
+    constructor(usage: UsageMap) {
+        super();
+        this.usage = usage;
+    }
+
+    private decrementPathExpressionsInStatement(ctx: ParseTree): void {
+        // We'll use a post-order traversal to visit all path expressions
+        const visitNode = (node: ParseTree): void => {
+            for (let i = 0; i < node.getChildCount(); i++) {
+                visitNode(node.getChild(i));
+            }
+            
+            if (node instanceof PathExpressionContext) {
+                const varName = node.getText();
+                this.checker.decrementAndCheck(varName);
+            }
+        };
+        
+        visitNode(ctx);
+    }
+
+    private toLVal(ctx: ExpressionContext): LVal {
+        if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
+            return { kind: "var", name: ctx.getText() };
+        } else if (ctx instanceof DereferenceExpressionContext) {
+            return { kind: "deref", inner: this.toLVal(ctx.expression()) };
+        }
+        throw new Error(`Unsupported lvalue expression: ${ctx.getText()}`);
+    }
+
+    private toRVal(ctx: ExpressionContext): string {
+        if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
+            return ctx.getText();
+        } else if (ctx instanceof DereferenceExpressionContext) {
+            return this.toRVal(ctx.expression());
+        }
+        throw new Error(`Unsupported rvalue expression: ${ctx.getText()}`);
+    }
+
+    private getType(ctx: Context): RustType {
+        let type = ctx.type;
+        if (type === undefined) {
+            type = this.getType(ctx.getChild(0));
+        }
+        return type;
+    }
+
+    visitBlockExpression(ctx: BlockExpressionContext): void {
+        const scanResults = new LocalScannerVisitor(ctx).visit(ctx);
+        const varsToDrop: string[] = [];
+        scanResults.names.forEach(name => varsToDrop.push(name));
+
+
+        this.visitChildren(ctx);
+        this.decrementPathExpressionsInStatement(ctx);
+        this.checker.exitScope(varsToDrop);
+       
+    }
+
+    visitStatements(ctx: StatementsContext): void {
+        ctx.statement().forEach((statement: StatementContext) => {
+            this.visit(statement);
+            this.decrementPathExpressionsInStatement(statement);
+        });
+        if (ctx.expression() !== null) {
+            this.visit(ctx.expression());
+            this.decrementPathExpressionsInStatement(ctx.expression());
+        }
+    }
+
+    visitLetStatement(ctx: LetStatementContext): void {
+        const name = ctx.identifierPattern().identifier().getText();
+
+        if (ctx.expression()) {
+            const expr = ctx.expression();
+            const type = this.getType(expr);
+
+            this.visit(expr);
+
+            if (expr instanceof BorrowExpressionContext) {
+                if (typeof type !== "string" && type.kind === "ref") {
+                    const lval = this.toLVal(expr.expression());
+                    const targetType = this.checker.immBorrow(lval);
+                    this.checker.declareVariable(name, targetType, this.usage.get(name));
+                } else if (typeof type !== "string" && type.kind === "mutRef") {
+                    const lval = this.toLVal(expr.expression());
+                    const targetType = this.checker.mutBorrow(lval);
+                    this.checker.declareVariable(name, targetType, this.usage.get(name));
+                }
+            } else {
+                if (isPrimitive(type)) {
+                    this.checker.declareVariable(name, type, this.usage.get(name));
+                } else if (isMoveSemantics(type)) {
+                    const rname = this.toRVal(expr);
+                    const target = this.checker.τ.get(rname).type;
+                    if (target !== "dangling" && typeof target !== "string" && target.kind === "mutRef") {
+                        const movedType = this.checker.τ.get(rname);
+                        this.checker.τ.set(rname, {type:"dangling", lifetime:0});
+                        this.checker.declareVariable(name, movedType.type, this.usage.get(name));
+                    } else {
+                        const lval = this.toLVal(expr)
+                        const movedType = this.checker.move(lval);
+                        this.checker.declareVariable(name, movedType, this.usage.get(name));
+                    }
+
+                } else if (type.kind === "ref") {
+                    const rname = this.toRVal(expr);
+                    const target = this.checker.τ.get(rname).type;
+                    if (target !== "dangling" && typeof target !== "string" && target.kind === "ref") {
+                        const targetType = this.checker.immBorrow(target.target);
+                        this.checker.declareVariable(name, targetType, this.usage.get(name));
+                    }
+                }
+
+            }
+
+            
+        }
+    }
+
+
+    visitAssignmentExpression(ctx: AssignmentExpressionContext): void {
+        const name = root(this.toLVal(ctx.expression(0)));
+
+        this.visit(ctx.expression(1));
+
+        if (ctx.expression(1)) {
+            const expr = ctx.expression(1);
+            const type = this.getType(expr);
+
+            if (expr instanceof BorrowExpressionContext) {
+                if (typeof type !== "string" && type.kind === "ref") {
+                    const lval = this.toLVal(expr.expression());
+                    const targetType = this.checker.immBorrow(lval);
+                    this.checker.τ.get(name).type = targetType;
+                } else if (typeof type !== "string" && type.kind === "mutRef") {
+                    const lval = this.toLVal(expr.expression());
+                    const targetType = this.checker.mutBorrow(lval);
+                    this.checker.τ.get(name).type = targetType;
+                }
+            } else {
+                if (isPrimitive(type)) {
+                    if (writeProhibited(this.toLVal(ctx.expression(0)), this.checker.τ)) {
+                        throw new Error(`Write prohibited due to active borrow of ${name}`);
+                    }
+                    this.checker.τ.get(name).type = type;
+                } else if (isMoveSemantics(type)) {
+                    const rname = this.toRVal(expr);
+                    const target = this.checker.τ.get(rname).type;
+                    if (target !== "dangling" && typeof target !== "string" && target.kind === "mutRef") {
+                        const movedType = this.checker.τ.get(rname);
+                        this.checker.τ.set(rname, {type:"dangling", lifetime:0});
+                        this.checker.τ.get(name).type = movedType.type;
+                    } else {
+                        const lval = this.toLVal(expr)
+                        const movedType = this.checker.move(lval);
+                        this.checker.τ.get(name).type = movedType;
+                    }
+
+                } else if (type.kind === "ref") {
+                    const rname = this.toRVal(expr);
+                    const target = this.checker.τ.get(rname).type;
+                    if (target !== "dangling" && typeof target !== "string" && target.kind === "ref") {
+                        const targetType = this.checker.immBorrow(target.target);
+                        this.checker.τ.get(name).type = targetType;
+                    }
+                }
+            }
+        }
+    }
+
+
+    visitPathExpression(ctx: PathExpressionContext): void {
+        const name = ctx.getText();
+        const lval: LVal = { kind: "var", name };
+
+        if(readProhibited(lval, this.checker.τ)) {
+            throw new Error(`Cannot use ${name} - it is currently mutably borrowed`);
+        }
+        this.checker.use(lval);
+       
+    }
+
+    visitDereferenceExpression(ctx: DereferenceExpressionContext): void {
+        const lval = this.toLVal(ctx.expression());
+
+        this.checker.use(lval);
+
+        // Additional check for dereference safety
+        const entry = typeLVal(lval, this.checker.τ);
+        if (!entry || entry.type === "dangling") {
+            throw new Error(`Cannot dereference invalid or moved value`);
+        }
+        
+    }
+
+    getErrors(): string[] {
+        return this.errors;
+    }
+}
+
+
 
 // Each CompilerEnvironment has a 1-to-1 mapping to a Rust scope.
 // At runtime, the environment will be used to look up variables.
@@ -345,118 +760,44 @@ class CompilerEnvironment {
     lookupName(pos: EnvironmentPosition): string | null {
         let currentEnv: CompilerEnvironment | null = this;
         let framesToClimb = pos.frameIndex;
-        
+
         // Walk up the environment chain to find the correct frame
         while (framesToClimb > 0 && currentEnv !== null) {
             currentEnv = currentEnv.parent;
             framesToClimb--;
         }
-        
+
         // Check if we found the correct environment frame
         if (currentEnv === null || framesToClimb > 0) {
             return null; // Frame index out of bounds
         }
-        
+
         // Check if local index is valid
         if (pos.localIndex < 0 || pos.localIndex >= currentEnv.locals.length) {
-            return null; 
+            return null;
         }
-        
+
         return currentEnv.locals[pos.localIndex];
     }
- }
-
-
-
-class BorrowChecker {
-    static borrowCheck(name: string, env: TypeEnvironment) {
-        const type = env.lookupType(name);
-        if (type.kind === "readRef") {
-            BorrowChecker.borrowRead(type.owner, env);
-        } else if (type.kind === "writeRef"){
-            BorrowChecker.borrowWrite(type.owner, env);
-        }
-    }
-
-    static borrowRead(ownerName: string, env: TypeEnvironment) {
-        const owner = env.lookupType(ownerName);
-        if (!owner || owner.kind !== "owned") {
-            throw new Error(`Cannot create read reference: ${ownerName} is not an owned value`);
-        }
-        if (owner.writeRefs > 0) {
-            throw new Error(`Cannot borrow ${ownerName} as immutable because it is already borrowed mutably`);
-        }
-        owner.readRefs++;
-        return;
-    }
-
-    static borrowWrite(ownerName: string, env: TypeEnvironment) {
-        const owner = env.lookupType(ownerName);
-        
-        if (!owner || owner.kind !== "owned") {
-            throw new Error(`Cannot create mutable reference: ${ownerName} is not an owned value`);
-        }
-        if (owner.readRefs > 0 || owner.writeRefs > 0) {
-            throw new Error(`Cannot borrow ${ownerName} as mutable because it is already borrowed`);
-        }
-        owner.writeRefs++;
-        return;
-    }
-
-    static freeCheck(name: string, env: TypeEnvironment): boolean {
-        const type = env.lookupType(name);
-        if (type.kind === "readRef") {
-            type.isAlive = false;
-            const ownerName = type.owner;
-            const owner = env.lookupType(ownerName);
-            if(owner.kind !== "owned") {
-                throw new Error(`Owner ${ownerName} must be of type owned.`);
-            }
-            owner.readRefs--;
-            return true;
-
-        } else if (type.kind === "writeRef"){
-            type.isAlive = false;
-            const ownerName = type.owner;
-            const owner = env.lookupType(ownerName);
-            if(owner.kind !== "owned") {
-                throw new Error(`Owner ${ownerName} must be of type owned.`);
-            }
-            owner.readRefs--;
-            return true;
-        } else if (type.kind === "owned") {
-            if (type.lifetimeCount === 0 && type.readRefs === 0 && type.writeRefs === 0) {
-                type.isAlive = false;
-                return true;
-            }
-        }
-        return false;
-    }
-
 }
 
 
 export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implements RustParserVisitor<void> {
     compilerEnv: CompilerEnvironment;
-    typeEnv: TypeEnvironment;
     bytecode: Bytecode[];
 
     constructor() {
         super();
         this.compilerEnv = new CompilerEnvironment();
-        this.typeEnv = new TypeEnvironment();
         this.bytecode = [];
     }
 
     private withNewEnvironment(ctx: ParserRuleContext, fn: () => void): void {
         // TODO: Error on duplicate variable names
-        const usageMap = countVariableUsages(ctx);
-        const scanResults  = new LocalScannerVisitor(ctx, usageMap).visit(ctx);
+        const scanResults = new LocalScannerVisitor(ctx).visit(ctx);
         const previousEnv = this.compilerEnv;
-        const prevTypes = this.typeEnv;
 
         this.compilerEnv = this.compilerEnv.extend(scanResults.names);
-        this.typeEnv = this.typeEnv.extend(scanResults);
 
         try {
             this.bytecode.push(ENTER_SCOPE(scanResults.names.length));
@@ -464,7 +805,6 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
             this.bytecode.push(EXIT_SCOPE());
         } finally {
             this.compilerEnv = previousEnv;
-            this.typeEnv = prevTypes;
         }
     }
 
@@ -487,7 +827,6 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
     visitLetStatement(ctx: LetStatementContext): void {
         const name = ctx.identifierPattern().identifier().getText();
         const envPos = this.compilerEnv.lookupPosition(name);
-        const type = this.typeEnv.lookupType(name);
         if (envPos === null) {
             throw new Error(`Variable ${name} not found in environment, this should not happen`);
         }
@@ -499,10 +838,9 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
     }
 
     private visitLValueExpression(ctx: ExpressionContext): void {
-        if (ctx instanceof PathExpressionContext) {
+        if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
             const name = ctx.getText();
             const envPos = this.compilerEnv.lookupPosition(name);
-            const type = this.typeEnv.lookupType(name);
             if (envPos === null) {
                 throw new Error(`Variable ${name} not found in environment, this should not happen`);
             }
@@ -554,7 +892,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         if (ctx.PLUS()) {
             this.bytecode.push(ADD());
             return;
-        } 
+        }
         throw new Error("Not implemented (visitArithmeticOrLogicalExpression)");
     }
 
@@ -562,7 +900,6 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
     visitPathExpression(ctx: PathExpressionContext): void {
         const name = ctx.getText();
         const pos = this.compilerEnv.lookupPosition(name);
-        const type = this.typeEnv.lookupType(name);
         this.bytecode.push(GET(pos.frameIndex, pos.localIndex, 0)); // TODO: Indirection should depend on type
     }
 
