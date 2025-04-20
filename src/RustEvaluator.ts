@@ -27,7 +27,7 @@ export class RustEvaluator extends BasicEvaluator {
             // Type check
             const tree = parser.crate();
             if (this.isDebug) {
-                // console.log(prettyPrint(tree.toStringTree(parser)));
+                console.log(prettyPrint(tree.toStringTree(parser)));
             }
             const typeCheckVisitor = new RustTypeCheckerVisitor();
             typeCheckVisitor.visit(tree);

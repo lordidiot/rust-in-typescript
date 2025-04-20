@@ -515,9 +515,9 @@ class BorrowChecker {
 
     // Declare a new variable in the borrow graph
     declareVariable(name: string, initialNodes: BorrowNode[], lifetime: number): void {
-        if (this.borrowMap.has(name)) {
-            throw new Error(`Variable ${name} already declared`);
-        }
+        // if (this.borrowMap.has(name)) {
+        //     throw new Error(`Variable ${name} already declared`);
+        // }
         this.borrowMap.set(name, {
             type: initialNodes,
             lifetime: lifetime ? lifetime + 1 : 1
@@ -530,8 +530,11 @@ class BorrowChecker {
     // Get the root node(s) for a variable
     getNodes(name: string): BorrowNode[] {
         const entry = this.borrowMap.get(name);
-        if (!entry || entry === "dangling") {
-            throw new Error(`Variable ${name} not found or has been moved`);
+        if (!entry) {
+            throw new Error(`cannot find ${name} in this scope`);
+        }
+        if (entry === "dangling") {
+            throw new Error(`use of moved value: ${name}`);
         }
         return entry.type;
     }
@@ -555,7 +558,7 @@ class BorrowChecker {
         // Check for conflicting mutable borrows
         if (this.hasActiveMutableBorrow(nodes)) {
             const varName = this.getVariableNameFromNodes(nodes);
-            throw new Error(`Cannot immutably borrow ${varName ?? 'value'} - already mutably borrowed`);
+            throw new Error(`cannot borrow ${varName} as immutable because it is also borrowed as mutable`);
         }
 
         // Create new reference node pointing to each input node
@@ -567,7 +570,7 @@ class BorrowChecker {
         // Check for any active borrows
         if (this.hasActiveBorrow(nodes)) {
             const varName = this.getVariableNameFromNodes(nodes);
-            throw new Error(`Cannot mutably borrow ${varName ?? 'value'} - already borrowed`);
+            throw new Error(`cannot borrow ${varName} as mutable because it is also borrowed as immutable`);
         }
 
         // Create new mutable reference node pointing to each input node
@@ -578,7 +581,7 @@ class BorrowChecker {
     move(nodes: BorrowNode[]): BorrowNode[] {
         if (this.hasActiveBorrow(nodes)) {
             const varName = this.getVariableNameFromNodes(nodes);
-            throw new Error(`Cannot move ${varName ?? 'value'} - active borrows exist`);
+            throw new Error(`cannot move out of ${varName} because it is borrowed`);
         }
 
         // Find and mark the owner as dangling
@@ -588,8 +591,10 @@ class BorrowChecker {
         }
 
         const entry = this.borrowMap.get(ownerName);
-        if (!entry || entry === "dangling") {
-            throw new Error(`Cannot move ${ownerName} - already moved or undefined`);
+        if(!entry) {
+            throw new Error(`cannot find ${name} in this scope`);
+        } else if (entry === "dangling") {
+            throw new Error(`use of moved value: ${name}`);
         }
 
         // Mark the original as moved
@@ -628,6 +633,21 @@ class BorrowChecker {
             }
         }
         return false;
+    }
+
+    checkIfAssignable(name: string): boolean {
+        const entry = this.borrowMap.get(name);
+        if(!entry) {
+            throw new Error(`cannot find ${name} in this scope`);
+        } else if (entry === "dangling") {
+            return true;
+        }
+
+        if (this.hasActiveBorrow(entry.type)) {
+            throw new Error(`cannot assign to ${name} because it is borrowed`);
+        }
+        
+        return true;
     }
 
     // Helper to check if a node references any node in a list
@@ -778,11 +798,13 @@ class BorrowChecker {
     use(name: string): void {
         const entry = this.borrowMap.get(name);
         if(!entry) {
-            throw new Error(`Cannot use ${name}`);
+            throw new Error(`cannot find ${name} in this scope`);
         } else if (entry === "dangling") {
-            throw new Error(`Cannot use variable ${name}, it has been moved`);
+            throw new Error(`use of moved value: ${name}`);
+        } else if (entry.type.length === 0) {
+            throw new Error(`used binding ${name} isn't initialized`)
         } else if (this.hasActiveMutableBorrow(entry.type)) {
-            throw new Error(`Cannot use ${name} because it was mutably borrowed.`)
+            throw new Error(`cannot use ${name} because it was mutably borrowed.`)
         }
     }
 
@@ -1115,11 +1137,11 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
         borrowNode.forEach(node => {
             if (!node) {
-                throw new Error(`Cannot dereference invalid or moved value`);
+                throw new Error(`cannot find variable in scope`);
             } else if (node.kind == "owned") {
-                throw new Error(`Cannot dereference owned value`);
+                throw new Error(`cannot dereference owned value`);
             } else if(!node.target) {
-                throw new Error(`Cannot dereference invalid or moved value`);
+                throw new Error(`cannot dereference moved value`);
             } else {
                 returnNodes.push(node.target);
             }
@@ -1154,7 +1176,17 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
 
     visitAssignmentExpression(ctx: AssignmentExpressionContext): void {
-        const name = ctx.expression(0).getText();
+        const lhs = ctx.expression(0);
+
+        if (!this.isValidAssignmentTarget(lhs)) {
+            throw new Error(`invalid left-hand side of assignment`);
+        }
+
+        const name = lhs.getText();
+        if (!this.borrowChecker.checkIfAssignable(name)) {
+            throw new Error(`cannot assign to ${name}`);
+        }
+
         
         if (!ctx.expression(1)) return;
         
@@ -1171,9 +1203,28 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         
         if (borrowType) {
             const targetNode = this.borrowChecker.borrowMap.get(name);
-            if (targetNode === "dangling") throw new Error(`cannot assign to moved ${name}`);
+            if (targetNode === "dangling") throw new Error(`cannot assign to moved value: ${name}`);
             targetNode.type = borrowType;
         }
+    }
+
+    private isValidAssignmentTarget(expr: ParseTree): boolean {
+        // Base case: Path expressions are valid
+        if (expr instanceof PathExpressionContext || 
+            expr instanceof PathExpression_Context) {
+            return true;
+        }
+    
+        // Explicitly invalid cases
+        if (expr instanceof BorrowExpressionContext ||
+            expr instanceof CallExpressionContext ||
+            expr instanceof LiteralExpressionContext ||
+            expr instanceof ArithmeticOrLogicalExpressionContext) {
+            return false;
+        }
+    
+        // Default case for other expression types
+        return this.isValidAssignmentTarget(expr.getChild(0));
     }
 
     visitPathExpression(ctx: PathExpressionContext): void {
