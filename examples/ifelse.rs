@@ -1,12 +1,14 @@
-{
+fn main() {
     let cond: bool = true;
-    let a: i32 = 32;
-    let b: i32 = 64;
-    let mut c: &i32 = &a;
-    if false {
-        c = &a;
+    let mut c: i32 = 1;
+    let mut d: i32 = 2;
+    let b: &mut i32;
+    
+    if cond {
+        b = &mut c;
     } else {
-        c = &b;
+        b = &mut d;
     }
-    *c
+    b;
+    b;
 }

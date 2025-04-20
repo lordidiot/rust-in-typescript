@@ -33,9 +33,8 @@ export class RustEvaluator extends BasicEvaluator {
             typeCheckVisitor.visit(tree);
 
             //Borrow Check
-            // const usageMap = countVariableUsages(tree);
-            // const borrowCheckerVisitor = new BorrowCheckingVisitor(usageMap);
-            // borrowCheckerVisitor.visit(tree);
+            const borrowCheckerVisitor = new BorrowCheckingVisitor();
+            borrowCheckerVisitor.visit(tree);
             
             // Compile
             if (this.isDebug) {

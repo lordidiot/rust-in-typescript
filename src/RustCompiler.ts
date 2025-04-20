@@ -1,9 +1,9 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree, TerminalNode } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, CallExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, CallExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, ExpressionStatementContext, ExpressionWithBlockContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, ReturnExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
 import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
-import { Context } from "vm";
+import { Context, createContext } from "vm";
 import { stringify } from "querystring";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
@@ -440,212 +440,306 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
     }
 }
 
-type LVal =
-    | { kind: "var", name: string }
-    | { kind: "deref", inner: LVal };
+type BorrowNode = 
+    | { kind: "owned", type: RustType, id: number }
+    | { kind: "ref", target: BorrowNode, id: number }
+    | { kind: "mutRef", target: BorrowNode, id: number };
 
-type BorrowType =
-    | PrimitiveType
-    | { kind: "box", inner: BorrowType }
-    | { kind: "ref", target: LVal }
-    | { kind: "mutRef", target: LVal }
+type BorrowNodeEntry = 
+    | { type: BorrowNode[]; lifetime: number } 
     | "dangling";
 
-type BorrowTypeEntry = { type: BorrowType; lifetime: number };
-type BorrowMap = Map<string, BorrowTypeEntry>;
+type BorrowMap = Map<string, BorrowNodeEntry>;
 
-function root(w: LVal): string {
-    return w.kind === "var" ? w.name : root(w.inner);
-}
+class BorrowChecker {
+    borrowMap: BorrowMap = new Map();
+    private nodeCounter: number = 0;
 
-function full(t: BorrowType): boolean {
-    if (t === "dangling") return false;
-    if (typeof t === "string") return true;
-    if (t.kind === "box") return full(t.inner);
-    return true;
-}
-
-function readProhibited(w: LVal, τ: BorrowMap): boolean {
-    const r = root(w);
-    for (const entry of τ.values()) {
-        const t = entry.type;
-        if (t !== "dangling" && typeof t !== "string" && t.kind === "mutRef" && root(t.target) === r) {
-            return true;
+    // Helper function to create a new unique node
+    createNode(kind: "owned" | "ref" | "mutRef", target?: BorrowNode, type?: RustType): BorrowNode {
+        if (kind === "owned") {
+            if (!type) {
+                throw new Error("Owned nodes must have a type");
+            }
+            const newNode = { kind: "owned", type: type, id: this.nodeCounter++} as BorrowNode;
+            return newNode;
         }
-    }
-    return false;
-}
-
-function writeProhibited(w: LVal, τ: BorrowMap): boolean {
-    const r = root(w);
-    for (const entry of τ.values()) {
-        const t = entry.type;
-        if (t !== "dangling" && typeof t !== "string" && (t.kind === "ref" || t.kind === "mutRef") && root(t.target) === r) {
-            return true;
+        if (!target) {
+            throw new Error("Reference nodes must have a target");
         }
-    }
-    return false;
-}
-
-function typeLVal(w: LVal, τ: BorrowMap): BorrowTypeEntry | undefined {
-    if (w.kind === "var") {
-        return τ.get(w.name);
-    }
-    const inner = typeLVal(w.inner, τ);
-    if (!inner) return undefined;
-    const t = inner.type;
-    if (t === "dangling" || typeof t === "string") return undefined;
-    if (t.kind === "ref" || t.kind === "mutRef") {
-        return typeLVal(t.target, τ);
-    }
-    if (t.kind === "box") {
-        return { type: t.inner, lifetime: inner.lifetime };
-    }
-    return undefined;
-}
-
-class FeatherweightBorrowChecker {
-    τ: BorrowMap;
-
-    constructor() {
-        this.τ = new Map();
+        const newNode = { kind, target, id: this.nodeCounter++ } as BorrowNode;
+        return newNode;
     }
 
-    declareVariable(name: string, type: BorrowType, lifetime: number): void {
-        if (this.τ.has(name)) {
+    // Declare a new variable in the borrow graph
+    declareVariable(name: string, initialNodes: BorrowNode[], lifetime: number): void {
+        if (this.borrowMap.has(name)) {
             throw new Error(`Variable ${name} already declared`);
         }
-        this.τ.set(name, { type, lifetime: lifetime ? lifetime + 1 : 1 });
+        this.borrowMap.set(name, {
+            type: initialNodes,
+            lifetime: lifetime ? lifetime + 1 : 1
+        });
+
         this.decrementAndCheck(name);
     }
 
-    use(w: LVal): void {
-        const entry = typeLVal(w, this.τ);
-        if (!entry) throw new Error(`Use of undefined or unresolvable value: ${JSON.stringify(w)}`);
-        if (entry.type === "dangling") throw new Error(`Use after move detected`);
-        
-    }
 
-    immBorrow(w: LVal): BorrowType {
-        const entry = typeLVal(w, this.τ);
-        if (!entry) throw new Error(`Cannot borrow undefined value`);
-        if (!full(entry.type)) throw new Error(`Cannot borrow from non-full type`);
-        if (readProhibited(w, this.τ)) {
-            throw new Error(`Shared borrow prohibited due to active mutable borrow of ${root(w)}`);
+    // Get the root node(s) for a variable
+    getNodes(name: string): BorrowNode[] {
+        const entry = this.borrowMap.get(name);
+        if (!entry || entry === "dangling") {
+            throw new Error(`Variable ${name} not found or has been moved`);
         }
-        return { kind: "ref", target: w };
-    }
-
-    mutBorrow(w: LVal): BorrowType {
-        const entry = typeLVal(w, this.τ);
-        if (!entry) throw new Error(`Cannot borrow undefined value`);
-        if (!full(entry.type)) throw new Error(`Cannot borrow from non-full type`);
-        if (writeProhibited(w, this.τ)) {
-            throw new Error(`Mutable borrow prohibited due to active borrow of ${root(w)}`);
-        }
-        return { kind: "mutRef", target: w };
-    }
-
-    move(w: LVal): BorrowType {
-        const entry = typeLVal(w, this.τ);
-        if (!entry) throw new Error(`Cannot move from undefined value`);
-        if (writeProhibited(w, this.τ)) {
-            throw new Error(`Move prohibited due to existing borrows of ${root(w)}`);
-        }
-        const r = root(w);
-        this.τ.set(r, { type: "dangling", lifetime: entry.lifetime });
         return entry.type;
     }
 
+    // Check if a node is mutable
+    private isMutable(node: BorrowNode): boolean {
+        return node.kind === "mutRef" || 
+               (node.kind === "owned" && this.isOwnedNodeMutable(node));
+    }
+
+    // Check if an owned node is mutable (implementation depends on your type system)
+    private isOwnedNodeMutable(node: BorrowNode): boolean {
+        if (node.kind !== "owned") {
+            throw new Error(`Node must be owned`);
+        }
+        return !isPrimitive(node.type);
+    }
+
+    // Create an immutable borrow
+    immBorrow(nodes: BorrowNode[]): BorrowNode[] {
+        // Check for conflicting mutable borrows
+        if (this.hasActiveMutableBorrow(nodes)) {
+            const varName = this.getVariableNameFromNodes(nodes);
+            throw new Error(`Cannot immutably borrow ${varName ?? 'value'} - already mutably borrowed`);
+        }
+
+        // Create new reference node pointing to each input node
+        return nodes.map(node => this.createNode("ref", node));
+    }
+
+    // Create a mutable borrow
+    mutBorrow(nodes: BorrowNode[]): BorrowNode[] {
+        // Check for any active borrows
+        if (this.hasActiveBorrow(nodes)) {
+            const varName = this.getVariableNameFromNodes(nodes);
+            throw new Error(`Cannot mutably borrow ${varName ?? 'value'} - already borrowed`);
+        }
+
+        // Create new mutable reference node pointing to each input node
+        return nodes.map(node => this.createNode("mutRef", node));
+    }
+
+    // Move nodes from their owner
+    move(nodes: BorrowNode[]): BorrowNode[] {
+        if (this.hasActiveBorrow(nodes)) {
+            const varName = this.getVariableNameFromNodes(nodes);
+            throw new Error(`Cannot move ${varName ?? 'value'} - active borrows exist`);
+        }
+
+        // Find and mark the owner as dangling
+        const ownerName = this.getVariableNameFromNodes(nodes);
+        if (!ownerName) {
+            return nodes;
+        }
+
+        const entry = this.borrowMap.get(ownerName);
+        if (!entry || entry === "dangling") {
+            throw new Error(`Cannot move ${ownerName} - already moved or undefined`);
+        }
+
+        // Mark the original as moved
+        this.borrowMap.set(ownerName, "dangling");
+        
+        // Return the original nodes
+        return entry.type;
+    }
+
+
+    // Check if any nodes in the input array are actively borrowed
+    private hasActiveBorrow(nodes: BorrowNode[]): boolean {
+        for (const [varName, entry] of this.borrowMap) {
+            if (entry === "dangling") continue;
+            
+            for (const node of entry.type) {
+                // Check if this node references any of our input nodes
+                if (this.nodeReferencesAny(node, nodes)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Check if any nodes in the input array are actively mutably borrowed
+    private hasActiveMutableBorrow(nodes: BorrowNode[]): boolean {
+        for (const [varName, entry] of this.borrowMap) {
+            if (entry === "dangling") continue;
+            
+            for (const node of entry.type) {
+                // Check if this is a mutable ref that references our nodes
+                if (node.kind === "mutRef" && this.nodeReferencesAny(node, nodes)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Helper to check if a node references any node in a list
+    private nodeReferencesAny(node: BorrowNode, targets: BorrowNode[]): boolean {
+        if (node.kind === "owned") return false;
+        
+        // Check direct references
+        if (targets.includes(node.target)) {
+            return true;
+        }
+        
+        // Recursively check reference chains
+        return this.nodeReferencesAny(node.target, targets);
+    }
+
+    // Helper to get variable name from nodes (if they belong to a variable)
+    getVariableNameFromNodes(nodes: BorrowNode[]): string | null {
+        for (const [name, entry] of this.borrowMap) {
+            if (entry === "dangling") continue;
+            
+            // Check if all nodes belong to this variable
+            if (nodes.every(node => entry.type.includes(node))) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+
+    // Decrement lifetimes and clean up
     decrementAndCheck(name: string): void {
-        const entry = this.τ.get(name);
+        const entry = this.borrowMap.get(name);
+        if (!entry || entry === "dangling") return;
+
+        entry.lifetime--;
+        if (entry.lifetime <= 0) {
+            this.maybeTransitionToDangling(name);
+        }
+    }
+
+    maybeTransitionToDangling(name: string): void {
+        const entry = this.borrowMap.get(name);
         if (!entry) return;
-
-        // Only decrement if not already dangling
-        if (entry.type !== "dangling") {
-            entry.lifetime--;
-
-            // Check if we should transition to dangling
-            if (entry.lifetime <= 0) {
-                this.maybeTransitionToDangling(name);
+    
+        if (entry === "dangling") return;
+    
+        if (!this.hasActiveBorrow(entry.type)) {
+            // Save the old nodes before marking as dangling
+            const oldNodes = entry.type;
+    
+            // Mark as dangling
+            this.borrowMap.set(name, "dangling");
+    
+            // Check parent lifetimes for any borrow nodes
+            for (const oldNode of oldNodes) {
+                if (oldNode.kind === "ref" || oldNode.kind === "mutRef") {
+                    const parentName = this.getNameFromNode(oldNode.target);
+                    if (parentName) {
+                        this.checkParentLifetime(parentName);
+                    }
+                }
             }
         }
     }
 
-    private maybeTransitionToDangling(name: string): void {
-        const entry = this.τ.get(name);
-        if (!entry || entry.type === "dangling") return;
-
-        // Check if any active borrows exist for this value
-        const hasActiveBorrows = Array.from(this.τ.values()).some(otherEntry => {
-            const t = otherEntry.type;
-            return t !== "dangling" &&
-                typeof t !== "string" &&
-                (t.kind === "ref" || t.kind === "mutRef") &&
-                root(t.target) === name;
-        });
-
-        if (!hasActiveBorrows) {
-            // Mark as dangling and check parent if this was a borrow
-            const oldType = entry.type;
-            this.τ.set(name, { type: "dangling", lifetime: 0 });
-
-            // If this was a borrow, check its parent
-            if (typeof oldType !== "string" && (oldType.kind === "ref" || oldType.kind === "mutRef")) {
-                const parentName = root(oldType.target);
-                this.checkParentLifetime(parentName);
+    getNameFromNode(node: BorrowNode): string | null {
+        // Find which variable owns this node
+        for (const [name, entry] of this.borrowMap) {
+            if(entry === "dangling") continue;
+            if (entry.type.includes(node)) {
+                return name;
             }
         }
+        return null;
     }
-
+    
     private checkParentLifetime(parentName: string): void {
-        const parentEntry = this.τ.get(parentName);
-        if (!parentEntry || parentEntry.type === "dangling") return;
-
+        const parentEntry = this.borrowMap.get(parentName);
+        if (!parentEntry || parentEntry === "dangling") return;
+    
         // Check if parent has any remaining borrows
-        const hasOtherBorrows = Array.from(this.τ.values()).some(otherEntry => {
-            if (otherEntry.type === "dangling" || typeof otherEntry.type === "string") return false;
-            return (otherEntry.type.kind === "ref" || otherEntry.type.kind === "mutRef") &&
-                root(otherEntry.type.target) === parentName;
-        });
-
+        const hasOtherBorrows = this.hasActiveBorrow(parentEntry.type);
+    
         // If no other borrows exist and parent's lifetime is expired
         if (!hasOtherBorrows && parentEntry.lifetime <= 0) {
-            this.τ.set(parentName, { type: "dangling", lifetime: 0 });
+            this.borrowMap.set(parentName, "dangling");
         }
     }
-
 
     exitScope(names: string[]): void {
+        // First collect all variables being dropped
+        const dropping = new Set(names);
+        
         for (const name of names) {
-            const entry = this.τ.get(name);
-            if (!entry || entry.type === "dangling") continue;
-
-            // Check for active borrows
-            const hasActiveBorrows = Array.from(this.τ.entries()).some(([otherName, otherEntry]) => {
-                if (otherName === name) return false;
-                const t = otherEntry.type;
-                return t !== "dangling" &&
-                    typeof t !== "string" &&
-                    (t.kind === "ref" || t.kind === "mutRef") &&
-                    root(t.target) === name;
-            });
-
-            if (hasActiveBorrows) {
-                throw new Error(`Cannot drop ${name} - still referenced by active borrows`);
-            }
-
-            const oldType = entry.type;
-            this.τ.delete(name);
-
-            // If this was a borrow, check its parent
-            if (typeof oldType !== "string" && (oldType.kind === "ref" || oldType.kind === "mutRef")) {
-                const parentName = root(oldType.target);
-                this.checkParentLifetime(parentName);
+            const entry = this.borrowMap.get(name);
+            if (entry === "dangling") continue;
+            
+            // Check for active borrows from variables NOT being dropped
+            const hasExternalBorrow = this.hasActiveBorrowFromNonDropped(
+                entry.type, 
+                dropping
+            );
+            
+            if (hasExternalBorrow) {
+                throw new Error(`${name} does not live long enough`);
             }
         }
+        
+        // Only delete after all checks pass
+        for (const name of names) {
+            this.borrowMap.delete(name);
+        }
     }
+    
+    private hasActiveBorrowFromNonDropped(nodes: BorrowNode[], dropping: Set<string>): boolean {
+        for (const [varName, entry] of this.borrowMap) {
+            // Skip variables that are being dropped
+            if (dropping.has(varName) || entry === "dangling") continue;
+            
+            for (const node of entry.type) {
+                if (this.nodeReferencesAnyIn(node, nodes)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    
+    private nodeReferencesAnyIn(node: BorrowNode, targets: BorrowNode[]): boolean {
+        if (node.kind === "owned") return false;
+        
+        // Check if this node references any target
+        if (targets.includes(node.target)) {
+            return true;
+        }
+        
+        // Recursively check reference chains
+        return this.nodeReferencesAnyIn(node.target, targets);
+    }
+
+    use(name: string): void {
+        const entry = this.borrowMap.get(name);
+        if(!entry) {
+            throw new Error(`Cannot use ${name}`);
+        } else if (entry === "dangling") {
+            throw new Error(`Cannot use variable ${name}, it has been moved`);
+        } else if (this.hasActiveMutableBorrow(entry.type)) {
+            throw new Error(`Cannot use ${name} because it was mutably borrowed.`)
+        }
+    }
+
+    
 }
+
 
 type UsageMap = Map<string, number>;
 
@@ -668,14 +762,15 @@ export function countVariableUsages(ctx: ParseTree): UsageMap {
 
 
 export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implements RustParserVisitor<void> {
-    private checker: FeatherweightBorrowChecker = new FeatherweightBorrowChecker();
-    private errors: string[] = [];
-    usage: UsageMap
+    private borrowChecker: BorrowChecker | null;
+    private usageMap: UsageMap;
+    private currentFunc: string;
+    private funcParms: Map<string, BorrowNode[]> = new Map();
 
-    constructor(usage: UsageMap) {
+    constructor() {
         super();
-        this.usage = usage;
     }
+
 
     private decrementPathExpressionsInStatement(ctx: ParseTree): void {
         // We'll use a post-order traversal to visit all path expressions
@@ -683,33 +778,119 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             for (let i = 0; i < node.getChildCount(); i++) {
                 visitNode(node.getChild(i));
             }
-            
             if (node instanceof PathExpressionContext) {
                 const varName = node.getText();
-                this.checker.decrementAndCheck(varName);
+                this.borrowChecker.decrementAndCheck(varName);
             }
         };
         
         visitNode(ctx);
     }
 
-    private toLVal(ctx: ExpressionContext): LVal {
-        if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
-            return { kind: "var", name: ctx.getText() };
-        } else if (ctx instanceof DereferenceExpressionContext) {
-            return { kind: "deref", inner: this.toLVal(ctx.expression()) };
-        }
-        throw new Error(`Unsupported lvalue expression: ${ctx.getText()}`);
+    visitCrate(ctx: CrateContext): void {
+        ctx.function_().forEach((fn: Function_Context) => {
+            this.visit(fn);
+        });
     }
 
-    private toRVal(ctx: ExpressionContext): string {
-        if (ctx instanceof PathExpressionContext || ctx instanceof PathExpression_Context) {
-            return ctx.getText();
-        } else if (ctx instanceof DereferenceExpressionContext) {
-            return this.toRVal(ctx.expression());
+    visitFunction_(ctx: Function_Context): void {
+        this.currentFunc = ctx.identifier().getText();
+
+        this.borrowChecker = new BorrowChecker();
+        this.usageMap = countVariableUsages(ctx.blockExpression());
+
+        let paramNames: string[] = [];
+        let paramTypes: RustType[] = []
+
+        if(ctx.functionParameters()) {
+            const scanResults = new LocalScannerVisitor(ctx).visit(ctx);
+
+            if (scanResults.names.length !== 1) {
+                throw new Error(`Should not happen`);
+            }
+
+            const fnType = scanResults.types[0];
+
+            if (isPrimitive(fnType) || fnType.kind !== "fn") {
+                throw new Error(`Should not happen`);
+            }
+
+            paramNames = fnType.paramNames; 
+            paramTypes = fnType.paramTypes;
         }
-        throw new Error(`Unsupported rvalue expression: ${ctx.getText()}`);
+        
+        let refParams: BorrowNode[] = [];
+        
+        
+        paramNames.forEach((param, i) => {
+            const type = paramTypes[i];
+            if (isRef(type)) {
+                const refnode = this.convertRustTypeToBorrowNodes(type);
+                refParams.push(refnode);
+                this.borrowChecker.declareVariable(
+                    param, 
+                    [refnode], 
+                    this.usageMap.get(param) || 1
+                );
+
+            } else {
+                const ownedNode = this.borrowChecker.createNode("owned", undefined, type);
+                this.borrowChecker.declareVariable(
+                    param, 
+                    [ownedNode], 
+                    this.usageMap.get(param) || 1
+                );
+                
+            }
+            
+        });
+
+        this.funcParms.set(this.currentFunc, refParams);
+
+        // Process function body
+        this.visit(ctx.blockExpression());
+
+        // Clean up
+        this.borrowChecker = null;
+        this.usageMap = null;
     }
+    
+    // Helper function to recursively convert RustType to BorrowNodes
+    private convertRustTypeToBorrowNodes(type: RustType): BorrowNode {
+        if (typeof type === "string") {
+            // Primitive types become owned nodes
+            return this.borrowChecker.createNode("owned", undefined, type);
+        }
+    
+        switch (type.kind) {
+            case "ref":
+                // Create ref nodes pointing to the target's nodes
+                const refTargetNodes = this.convertRustTypeToBorrowNodes(type.target);
+                return this.borrowChecker.createNode("ref", refTargetNodes);
+                
+            case "mutRef":
+                // Create mutRef nodes pointing to the target's nodes
+                const mutRefTargetNodes = this.convertRustTypeToBorrowNodes(type.target);
+                return this.borrowChecker.createNode("mutRef", mutRefTargetNodes);
+            default:
+                throw new Error(`Unhandled RustType kind: ${(type as any).kind}`);
+        }
+    }
+    
+  
+
+    visitCallExpression(ctx: CallExpressionContext): void {
+        // Process arguments
+        if (ctx.callParams()) {
+            ctx.callParams().expression().forEach(arg => {
+                const nodes = this.resolveExpressionType(arg);
+                if(nodes[0].kind === "owned" && isMoveSemantics(nodes[0].type) || nodes[0].kind === "mutRef") {
+                    this.borrowChecker.move(nodes);
+                }
+            });
+        }
+    }
+
 
     private getType(ctx: Context): RustType {
         let type = ctx.type;
@@ -724,17 +905,16 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         const varsToDrop: string[] = [];
         scanResults.names.forEach(name => varsToDrop.push(name));
 
-
         this.visitChildren(ctx);
-        this.decrementPathExpressionsInStatement(ctx);
-        this.checker.exitScope(varsToDrop);
-       
+        this.borrowChecker.exitScope(varsToDrop);
     }
 
     visitStatements(ctx: StatementsContext): void {
         ctx.statement().forEach((statement: StatementContext) => {
             this.visit(statement);
-            this.decrementPathExpressionsInStatement(statement);
+            if (!(statement.getChild(0).getChild(0) instanceof ExpressionWithBlockContext)) {
+                this.decrementPathExpressionsInStatement(statement);
+            }
         });
         if (ctx.expression() !== null) {
             this.visit(ctx.expression());
@@ -744,133 +924,259 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
     visitLetStatement(ctx: LetStatementContext): void {
         const name = ctx.identifierPattern().identifier().getText();
-
-        if (ctx.expression()) {
-            const expr = ctx.expression();
-            const type = this.getType(expr);
-
-            this.visit(expr);
-
-            if (expr instanceof BorrowExpressionContext) {
-                if (typeof type !== "string" && type.kind === "ref") {
-                    const lval = this.toLVal(expr.expression());
-                    const targetType = this.checker.immBorrow(lval);
-                    this.checker.declareVariable(name, targetType, this.usage.get(name));
-                } else if (typeof type !== "string" && type.kind === "mutRef") {
-                    const lval = this.toLVal(expr.expression());
-                    const targetType = this.checker.mutBorrow(lval);
-                    this.checker.declareVariable(name, targetType, this.usage.get(name));
-                }
-            } else {
-                if (isPrimitive(type)) {
-                    this.checker.declareVariable(name, type, this.usage.get(name));
-                } else if (isMoveSemantics(type)) {
-                    const rname = this.toRVal(expr);
-                    const target = this.checker.τ.get(rname).type;
-                    if (target !== "dangling" && typeof target !== "string" && target.kind === "mutRef") {
-                        const movedType = this.checker.τ.get(rname);
-                        this.checker.τ.set(rname, {type:"dangling", lifetime:0});
-                        this.checker.declareVariable(name, movedType.type, this.usage.get(name));
-                    } else {
-                        const lval = this.toLVal(expr)
-                        const movedType = this.checker.move(lval);
-                        this.checker.declareVariable(name, movedType, this.usage.get(name));
-                    }
-
-                } else if (type.kind === "ref") {
-                    const rname = this.toRVal(expr);
-                    const target = this.checker.τ.get(rname).type;
-                    if (target !== "dangling" && typeof target !== "string" && target.kind === "ref") {
-                        const targetType = this.checker.immBorrow(target.target);
-                        this.checker.declareVariable(name, targetType, this.usage.get(name));
-                    }
-                }
-
-            }
-
-            
+        
+        if (!ctx.expression()){
+            this.borrowChecker.declareVariable(name, [], this.usageMap.get(name));
+            return;
         }
+        
+        const expr = ctx.expression();
+        
+        // Visit the expression first to handle any sub-expressions
+        this.visit(expr);
+        
+        // Handle the expression recursively
+        let borrowType = this.resolveExpressionType(expr);
+
+        if(borrowType[0].kind === "owned" && isMoveSemantics(borrowType[0].type) || borrowType[0].kind === "mutRef") {
+            borrowType = this.borrowChecker.move(borrowType);
+        }
+        
+        if (borrowType) {
+            this.borrowChecker.declareVariable(name, borrowType, this.usageMap.get(name));
+        }
+    }
+    
+    private resolveExpressionType(expr: ParseTree): BorrowNode[] | undefined {
+        if (expr instanceof BorrowExpressionContext) {
+            return this.handleBorrowExpression(expr);
+        }
+        else if (expr instanceof PathExpressionContext) {
+            return this.handlePathExpression(expr);
+        }
+        else if (expr instanceof PathExpression_Context) {
+            return this.handlePathExpression_(expr);
+        }
+        else if (expr instanceof DereferenceExpressionContext) {
+            return this.handleDereferenceExpression(expr);
+        }
+        else if (expr instanceof CallExpressionContext) {
+            return this.handleCallExpression(expr);
+        } else if (expr instanceof LiteralExpressionContext || ArithmeticOrLogicalExpressionContext) {
+            const type = this.getType(expr);
+            if (isPrimitive(type)) {
+                const borrowNode = this.borrowChecker.createNode("owned", undefined, type);
+                return [borrowNode];
+            }
+        }
+        
+        if(expr.getChild(0)) {
+            return this.resolveExpressionType(expr.getChild(0));
+        }
+
+        return undefined;
+    }
+    
+    private handleBorrowExpression(expr: BorrowExpressionContext): BorrowNode[] {
+        const innerExpr = expr.expression();
+        const borrowNode = this.resolveExpressionType(innerExpr);
+
+        if (expr.KW_MUT()) {
+            return this.borrowChecker.mutBorrow(borrowNode);
+        } else {
+            return this.borrowChecker.immBorrow(borrowNode);
+        }
+    }
+    
+    private handlePathExpression(expr: PathExpressionContext): BorrowNode[] {
+        const name = expr.getText();
+        return this.borrowChecker.getNodes(name);
+    }
+
+    private handlePathExpression_(expr: PathExpression_Context): BorrowNode[] {
+        const name = expr.getText();
+        return this.borrowChecker.getNodes(name);
+    }
+    
+    private handleDereferenceExpression(expr: DereferenceExpressionContext): BorrowNode[]  {  
+        const borrowNode = this.resolveExpressionType(expr.expression());
+        let returnNodes: BorrowNode[];
+
+        borrowNode.forEach(node => {
+            if (!node) {
+                throw new Error(`Cannot dereference invalid or moved value`);
+            } else if (node.kind == "owned") {
+                throw new Error(`Cannot dereference owned value`);
+            } else if(!node.target) {
+                throw new Error(`Cannot dereference invalid or moved value`);
+            } else {
+                returnNodes.push(node.target);
+            }
+        });
+
+        return returnNodes;
+    }
+    
+    private handleCallExpression(expr: CallExpressionContext): BorrowNode[] {
+        const retType = expr.type;
+
+        if (isRef(retType)) {
+            let returnNodes: BorrowNode[] = [];
+            if (expr.callParams() !== null) {
+                expr.callParams().expression().forEach((expr: ExpressionContext) => {
+                    const nodes = this.resolveExpressionType(expr);
+                    nodes.forEach(node => {
+                        if (node.kind === "ref" || node.kind === "mutRef") {
+                            returnNodes.push(node);
+                        }
+                    });
+                    if(nodes[0].kind === "owned" && isMoveSemantics(nodes[0].type) || nodes[0].kind === "mutRef") {
+                        this.borrowChecker.move(nodes);
+                    }
+                });                
+            }
+            return returnNodes;
+        } 
+        return [this.borrowChecker.createNode("owned", undefined, retType)];
+        
     }
 
 
     visitAssignmentExpression(ctx: AssignmentExpressionContext): void {
-        const name = root(this.toLVal(ctx.expression(0)));
+        const name = ctx.expression(0).getText();
+        
+        if (!ctx.expression(1)) return;
+        
+        const expr = ctx.expression(1);
 
-        this.visit(ctx.expression(1));
+        this.visit(expr)
+        
+        // Handle the expression recursively
+        let borrowType = this.resolveExpressionType(expr);
 
-        if (ctx.expression(1)) {
-            const expr = ctx.expression(1);
-            const type = this.getType(expr);
+        if(borrowType[0].kind === "owned" && isMoveSemantics(borrowType[0].type) || borrowType[0].kind === "mutRef") {
+            borrowType = this.borrowChecker.move(borrowType);
+        }
+        
+        if (borrowType) {
+            const targetNode = this.borrowChecker.borrowMap.get(name);
+            if (targetNode === "dangling") throw new Error(`cannot assign to moved ${name}`);
+            targetNode.type = borrowType;
+        }
+    }
 
-            if (expr instanceof BorrowExpressionContext) {
-                if (typeof type !== "string" && type.kind === "ref") {
-                    const lval = this.toLVal(expr.expression());
-                    const targetType = this.checker.immBorrow(lval);
-                    this.checker.τ.get(name).type = targetType;
-                } else if (typeof type !== "string" && type.kind === "mutRef") {
-                    const lval = this.toLVal(expr.expression());
-                    const targetType = this.checker.mutBorrow(lval);
-                    this.checker.τ.get(name).type = targetType;
-                }
-            } else {
-                if (isPrimitive(type)) {
-                    if (writeProhibited(this.toLVal(ctx.expression(0)), this.checker.τ)) {
-                        throw new Error(`Write prohibited due to active borrow of ${name}`);
-                    }
-                    this.checker.τ.get(name).type = type;
-                } else if (isMoveSemantics(type)) {
-                    const rname = this.toRVal(expr);
-                    const target = this.checker.τ.get(rname).type;
-                    if (target !== "dangling" && typeof target !== "string" && target.kind === "mutRef") {
-                        const movedType = this.checker.τ.get(rname);
-                        this.checker.τ.set(rname, {type:"dangling", lifetime:0});
-                        this.checker.τ.get(name).type = movedType.type;
-                    } else {
-                        const lval = this.toLVal(expr)
-                        const movedType = this.checker.move(lval);
-                        this.checker.τ.get(name).type = movedType;
-                    }
+    visitPathExpression(ctx: PathExpressionContext): void {
+       const name = ctx.getText();
+       this.borrowChecker.use(name);
+    }
 
-                } else if (type.kind === "ref") {
-                    const rname = this.toRVal(expr);
-                    const target = this.checker.τ.get(rname).type;
-                    if (target !== "dangling" && typeof target !== "string" && target.kind === "ref") {
-                        const targetType = this.checker.immBorrow(target.target);
-                        this.checker.τ.get(name).type = targetType;
-                    }
+    visitPathExpression_(ctx: PathExpression_Context): void {
+        const name = ctx.getText();
+        this.borrowChecker.use(name);
+     }
+
+    visitBorrowExpression(ctx: BorrowExpressionContext): void {
+        this.handleBorrowExpression(ctx);
+    }
+
+
+    visitIfExpression(ctx: IfExpressionContext): void {
+        this.visit(ctx.expression());
+        this.decrementPathExpressionsInStatement(ctx.expression());
+    
+        // Shallow clone is sufficient since we won't modify nodes
+        const originalBorrowMap = new Map(this.borrowChecker.borrowMap);
+        
+        const elseUsage = ctx.KW_ELSE() 
+            ? countVariableUsages(ctx.blockExpression()[1] || ctx.ifExpression()!)
+            : new Map<string, number>();
+        
+        // Process if branch while accounting for else usages
+        this.adjustForOppositeBranch(elseUsage);
+        this.visit(ctx.blockExpression(0));
+        const ifBorrowMap = new Map(this.borrowChecker.borrowMap);
+        
+        // Process else branch if exists
+        let elseBorrowMap = new Map(originalBorrowMap);
+        if (ctx.KW_ELSE()) {
+            const elseClause = ctx.blockExpression()[1] || ctx.ifExpression()!;
+            const ifUsage = countVariableUsages(ctx.blockExpression(0));
+            
+            // Restore to original state before processing else
+            this.borrowChecker.borrowMap = new Map(originalBorrowMap);
+            this.adjustForOppositeBranch(ifUsage);
+            
+            this.visit(elseClause);
+            elseBorrowMap = new Map(this.borrowChecker.borrowMap);
+        }
+        
+        // Merge the borrow maps from both branches
+        this.borrowChecker.borrowMap = this.mergeBranchMaps(ifBorrowMap, elseBorrowMap);
+    }
+    
+    private adjustForOppositeBranch(oppositeUsage: UsageMap): void {
+        for (const [varName, count] of oppositeUsage) {
+            const entry = this.borrowChecker.borrowMap.get(varName);
+            if (entry && entry !== "dangling") {
+                // Create new entry with updated lifetime
+                const newEntry = {
+                    type: entry.type,  // Reference to same nodes
+                    lifetime: Math.max(0, entry.lifetime - count)
+                };
+                this.borrowChecker.borrowMap.set(varName, newEntry);
+                
+                if (newEntry.lifetime <= 0) {
+                    this.borrowChecker.maybeTransitionToDangling(varName);
                 }
             }
         }
     }
-
-
-    visitPathExpression(ctx: PathExpressionContext): void {
-        const name = ctx.getText();
-        const lval: LVal = { kind: "var", name };
-
-        if(readProhibited(lval, this.checker.τ)) {
-            throw new Error(`Cannot use ${name} - it is currently mutably borrowed`);
+    
+    private mergeBranchMaps(ifMap: BorrowMap, elseMap: BorrowMap): BorrowMap {
+        const merged = new Map<string, BorrowNodeEntry>();
+        const allVars = new Set([...ifMap.keys(), ...elseMap.keys()]);
+    
+        for (const varName of allVars) {
+            const ifEntry = ifMap.get(varName);
+            const elseEntry = elseMap.get(varName);
+    
+            // Case 1: Variable only in one branch
+            if (!ifEntry || !elseEntry) {
+                merged.set(varName, ifEntry || elseEntry!);
+                continue;
+            }
+    
+            // Case 2: Variable in both branches but one is dangling
+            if (ifEntry === "dangling" && elseEntry === "dangling") {
+                merged.set(varName, "dangling");
+                continue;
+            } else if (ifEntry === "dangling") {
+                merged.set(varName, elseEntry);
+                continue;
+            } else if (elseEntry === "dangling") {
+                merged.set(varName, ifEntry);
+                continue;
+            }
+    
+            // Case 3: Merge nodes and lifetimes
+            const mergedNodes = [...new Set([...ifEntry.type, ...elseEntry.type])];
+            const mergedLifetime = Math.min(ifEntry.lifetime, elseEntry.lifetime);
+    
+            merged.set(varName, {
+                type: mergedNodes,  // References to original nodes
+                lifetime: mergedLifetime
+            });
+    
+            if (mergedLifetime <= 0) {
+                // Create new dangling entry without modifying original maps
+                merged.set(varName, "dangling");
+            }
         }
-        this.checker.use(lval);
-       
+    
+        return merged;
     }
+   
 
-    visitDereferenceExpression(ctx: DereferenceExpressionContext): void {
-        const lval = this.toLVal(ctx.expression());
-
-        this.checker.use(lval);
-
-        // Additional check for dereference safety
-        const entry = typeLVal(lval, this.checker.τ);
-        if (!entry || entry.type === "dangling") {
-            throw new Error(`Cannot dereference invalid or moved value`);
-        }
-        
-    }
-
-    getErrors(): string[] {
-        return this.errors;
-    }
 }
 
 
