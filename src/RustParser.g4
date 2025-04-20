@@ -509,7 +509,7 @@ expressionWithBlock
     | blockExpression
     | asyncBlockExpression
     | unsafeBlockExpression
-    | loopExpression
+    | predicateLoopExpression
     | ifExpression
     | ifLetExpression
     | matchExpression

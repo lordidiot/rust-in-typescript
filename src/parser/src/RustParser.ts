@@ -4682,9 +4682,7 @@ export class RustParser extends RustParserBase {
             case RustParser.KW_CONTINUE:
             case RustParser.KW_CRATE:
             case RustParser.KW_FALSE:
-            case RustParser.KW_FOR:
             case RustParser.KW_IF:
-            case RustParser.KW_LOOP:
             case RustParser.KW_MATCH:
             case RustParser.KW_MOVE:
             case RustParser.KW_RETURN:
@@ -4707,7 +4705,6 @@ export class RustParser extends RustParserBase {
             case RustParser.RAW_BYTE_STRING_LITERAL:
             case RustParser.INTEGER_LITERAL:
             case RustParser.FLOAT_LITERAL:
-            case RustParser.LIFETIME_OR_LABEL:
             case RustParser.MINUS:
             case RustParser.STAR:
             case RustParser.NOT:
@@ -5121,7 +5118,7 @@ export class RustParser extends RustParserBase {
                 this.state = 1306;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                     {
                     this.state = 1305;
                     this.arrayElements();
@@ -5158,7 +5155,7 @@ export class RustParser extends RustParserBase {
                 this.state = 1317;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                     {
                     this.state = 1316;
                     this.tupleElements();
@@ -5446,7 +5443,7 @@ export class RustParser extends RustParserBase {
                         this.state = 1375;
                         this.errorHandler.sync(this);
                         _la = this.tokenStream.LA(1);
-                        if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+                        if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                             {
                             this.state = 1374;
                             this.callParams();
@@ -5512,7 +5509,7 @@ export class RustParser extends RustParserBase {
                         this.state = 1391;
                         this.errorHandler.sync(this);
                         _la = this.tokenStream.LA(1);
-                        if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+                        if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                             {
                             this.state = 1390;
                             this.callParams();
@@ -5731,7 +5728,7 @@ export class RustParser extends RustParserBase {
                 this.enterOuterAlt(localContext, 5);
                 {
                 this.state = 1428;
-                this.loopExpression();
+                this.predicateLoopExpression();
                 }
                 break;
             case 6:
@@ -5859,7 +5856,7 @@ export class RustParser extends RustParserBase {
             this.state = 1442;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401658932) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5543233) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401591348) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5543233) !== 0)) {
                 {
                 this.state = 1441;
                 this.statements();
@@ -5918,7 +5915,7 @@ export class RustParser extends RustParserBase {
                 this.state = 1452;
                 this.errorHandler.sync(this);
                 _la = this.tokenStream.LA(1);
-                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+                if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                     {
                     this.state = 1451;
                     this.expression(0);
@@ -6113,7 +6110,7 @@ export class RustParser extends RustParserBase {
             this.state = 1491;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                 {
                 this.state = 1490;
                 this.expression(0);
@@ -6468,7 +6465,7 @@ export class RustParser extends RustParserBase {
             this.state = 1567;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                 {
                 this.state = 1556;
                 this.expression(0);
@@ -6750,7 +6747,7 @@ export class RustParser extends RustParserBase {
             this.state = 1619;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401625140) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7919743) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
+            if ((((_la) & ~0x1F) === 0 && ((1 << _la) & 1401557556) !== 0) || ((((_la - 32)) & ~0x1F) === 0 && ((1 << (_la - 32)) & 121634841) !== 0) || ((((_la - 69)) & ~0x1F) === 0 && ((1 << (_la - 69)) & 7915647) !== 0) || ((((_la - 106)) & ~0x1F) === 0 && ((1 << (_la - 106)) & 5542209) !== 0)) {
                 {
                 this.state = 1608;
                 this.expression(0);
@@ -6932,9 +6929,7 @@ export class RustParser extends RustParserBase {
             case RustParser.KW_CONTINUE:
             case RustParser.KW_CRATE:
             case RustParser.KW_FALSE:
-            case RustParser.KW_FOR:
             case RustParser.KW_IF:
-            case RustParser.KW_LOOP:
             case RustParser.KW_MATCH:
             case RustParser.KW_MOVE:
             case RustParser.KW_RETURN:
@@ -6957,7 +6952,6 @@ export class RustParser extends RustParserBase {
             case RustParser.RAW_BYTE_STRING_LITERAL:
             case RustParser.INTEGER_LITERAL:
             case RustParser.FLOAT_LITERAL:
-            case RustParser.LIFETIME_OR_LABEL:
             case RustParser.MINUS:
             case RustParser.STAR:
             case RustParser.NOT:
@@ -12112,7 +12106,7 @@ export class RustParser extends RustParserBase {
         7,6,0,0,1417,159,1,0,0,0,1418,1420,3,142,71,0,1419,1418,1,0,0,0,
         1420,1421,1,0,0,0,1421,1419,1,0,0,0,1421,1422,1,0,0,0,1422,1423,
         1,0,0,0,1423,1424,3,160,80,0,1424,1433,1,0,0,0,1425,1433,3,166,83,
-        0,1426,1433,3,170,85,0,1427,1433,3,172,86,0,1428,1433,3,214,107,
+        0,1426,1433,3,170,85,0,1427,1433,3,172,86,0,1428,1433,3,218,109,
         0,1429,1433,3,226,113,0,1430,1433,3,228,114,0,1431,1433,3,230,115,
         0,1432,1419,1,0,0,0,1432,1425,1,0,0,0,1432,1426,1,0,0,0,1432,1427,
         1,0,0,0,1432,1428,1,0,0,0,1432,1429,1,0,0,0,1432,1430,1,0,0,0,1432,
@@ -17111,8 +17105,8 @@ export class ExpressionWithBlockContext extends antlr.ParserRuleContext {
     public unsafeBlockExpression(): UnsafeBlockExpressionContext | null {
         return this.getRuleContext(0, UnsafeBlockExpressionContext);
     }
-    public loopExpression(): LoopExpressionContext | null {
-        return this.getRuleContext(0, LoopExpressionContext);
+    public predicateLoopExpression(): PredicateLoopExpressionContext | null {
+        return this.getRuleContext(0, PredicateLoopExpressionContext);
     }
     public ifExpression(): IfExpressionContext | null {
         return this.getRuleContext(0, IfExpressionContext);

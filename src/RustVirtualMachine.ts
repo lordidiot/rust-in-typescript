@@ -5,6 +5,8 @@ export type Bytecode =
     | { type: "LDCP", primitive: Value } // Load constant value primitive
     | { type: "ENTER_SCOPE", size: number }
     | { type: "EXIT_SCOPE" }
+    | { type: "ENTER_LOOP" }
+    | { type: "EXIT_LOOP" }
     | { type: "SET", frameIndex: number, localIndex: number, indirection: number }
     | { type: "GET", frameIndex: number, localIndex: number, indirection: number }
     | { type: "DEREF" }
@@ -16,6 +18,7 @@ export type Bytecode =
     | { type: "MUL" }
     | { type: "DIV" }
     | { type: "MOD" }
+    | { type: "EQ" }
     | { type: "FREE", frameIndex: number, localIndex: number}
     | { type: "JOFR", skip: number } // Jump on false relative
     | { type: "GOTOR", skip: number} // Goto relative
@@ -25,6 +28,8 @@ export const POP = (): Bytecode => ({ type: "POP" });
 export const LDCP = (primitive: Value): Bytecode => ({ type: "LDCP", primitive });
 export const ENTER_SCOPE = (size: number): Bytecode => ({ type: "ENTER_SCOPE", size });
 export const EXIT_SCOPE = (): Bytecode => ({ type: "EXIT_SCOPE" });
+export const ENTER_LOOP = (): Bytecode => ({ type: "ENTER_LOOP" });
+export const EXIT_LOOP = (): Bytecode => ({ type: "EXIT_LOOP" });
 export const SET = (frameIndex: number, localIndex: number, indirection: number): Bytecode =>
     ({ type: "SET", frameIndex, localIndex, indirection });
 export const GET = (frameIndex: number, localIndex: number, indirection: number): Bytecode =>
@@ -38,6 +43,7 @@ export const SUB = (): Bytecode => ({ type: "SUB" });
 export const MUL = (): Bytecode => ({ type: "MUL" });
 export const DIV = (): Bytecode => ({ type: "DIV" });
 export const MOD = (): Bytecode => ({ type: "MOD" });
+export const EQ = (): Bytecode => ({ type: "EQ" });
 export const FREE = (frameIndex: number, localIndex: number): Bytecode => ({ type: "FREE", frameIndex, localIndex});
 export const JOFR = (skip: number): Bytecode => ({ type: "JOFR", skip });
 export const GOTOR = (skip: number): Bytecode => ({ type: "GOTOR", skip });
@@ -101,8 +107,25 @@ export class RustVirtualMachine {
                 // free(prevEnv)
                 break;
             }
+            case "ENTER_LOOP": {
+                this.runtimeStack.push({
+                    savedPc: -1, // Shouldn't be used
+                    savedEnv: this.env,
+                })
+                break;
+            }
+            case "EXIT_LOOP": {
+                const frame = this.runtimeStack.pop()!;
+                while (!this.env.equals(frame.savedEnv)) {
+                    this.env = this.heap.getPairFirst(this.env);
+                    // TODO: Free
+                    // this.heap.free(...);
+                    // this.heap.free(...);
+                }
+                break;
+            }
             case "SET": {
-                const value = this.peek();
+                const value = this.operandStack.pop!();
                 const frameIndex = ins.frameIndex;
                 const localIndex = ins.localIndex;
                 let env = this.env;
@@ -203,6 +226,14 @@ export class RustVirtualMachine {
                 const a = this.operandStack.pop()!;
                 if (b.asi32() === 0) throw new Error("Division by zero");
                 const res = Value.fromi32(a.asi32() % b.asi32());
+                break;
+            }
+            case "EQ": {
+                const b = this.operandStack.pop()!;
+                const a = this.operandStack.pop()!;
+                // Naive equality check
+                const res = Value.fromBool(a.equals(b));
+                this.operandStack.push(res);
                 break;
             }
             case "FREE": {
