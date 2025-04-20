@@ -1,7 +1,7 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree, TerminalNode } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, CallExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, BreakExpressionContext, CallExpressionContext, ComparisonExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, PredicateLoopExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
-import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE } from "./RustVirtualMachine";
+import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE, EQ, ENTER_LOOP, EXIT_LOOP } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
 import { Context } from "vm";
 import { stringify } from "querystring";
@@ -161,7 +161,7 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
     }
 
     visitLetStatement(ctx: LetStatementContext): ScanResults {
-        // // TODO: Error on case where type annotation is not present
+        // TODO: Error on case where type annotation is not present
         const name = ctx.identifierPattern().identifier().getText();
         const type = this.parseType(ctx.type_());
         return {
@@ -308,6 +308,36 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
             throw new Error(`Type error: ${JSON.stringify(leftType)} and ${JSON.stringify(rightType)} are not compatible. Line ${ctx.start.line}`);
         }
         ctx.type = leftType;
+        return ctx.type;
+    }
+
+    visitComparisonExpression(ctx: ComparisonExpressionContext): RustType {
+        const leftType = this.visit(ctx.getChild(0));
+        const rightType = this.visit(ctx.getChild(2));
+        if (!typeEqual(leftType, rightType)) {
+            throw new Error(`mismatched types, expected ${JSON.stringify(leftType)}, found ${JSON.stringify(rightType)}. Line ${ctx.start.line}`);
+        }
+        const operator = ctx.comparisonOperator().getText();
+        if (operator === "==") {
+        } else {
+            throw new Error(`Unhandled comparison operator ${operator}. Line ${ctx.start.line}`);
+        }
+        ctx.type = "bool";
+        return ctx.type;
+    }
+
+    visitPredicateLoopExpression(ctx: PredicateLoopExpressionContext): RustType {
+        const predType = this.visit(ctx.expression())
+        if (predType !== "bool") {
+            throw new Error(`mismatched types, expected bool found ${JSON.stringify(predType)}. Line ${ctx.start.line}`);
+        }
+        ctx.type = this.visit(ctx.blockExpression());
+        return ctx.type;
+    }
+
+    // TODO: Should we check if this is within a loop?
+    visitBreakExpression(ctx: BreakExpressionContext): RustType {
+        ctx.type = UNIT_TYPE;
         return ctx.type;
     }
 
@@ -936,10 +966,12 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
     compilerEnv: CompilerEnvironment;
     typeEnv: TypeEnvironment;
     bytecode: Bytecode[];
+    currentLoopEnd: number[];
 
     constructor() {
         super();
         this.bytecode = [];
+        this.currentLoopEnd = [];
     }
 
     private visitAndGetBytecodeSize(tree: ParseTree): number {
@@ -1004,7 +1036,6 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
             reversedParams.forEach((name: string) => {
                 const envPos = this.compilerEnv.lookupPosition(name);
                 this.bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0));
-                this.bytecode.push(POP());
             });
             this.visit(ctx.blockExpression());
         }, {
@@ -1020,7 +1051,6 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         }
         this.bytecode.push(LDCP(Value.fromu32(fnAddress)));
         this.bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0));
-        this.bytecode.push(POP());
     }
 
     visitCallExpression(ctx: CallExpressionContext): void {
@@ -1042,7 +1072,11 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
     visitStatements(ctx: StatementsContext): void {
         ctx.statement().forEach((statement: StatementContext) => {
             this.visit(statement);
-            this.bytecode.push(POP()); // TODO: Whether to free or not
+            if (statement.type !== UNIT_TYPE) {
+                this.bytecode.push(POP()); // TODO: Whether to free or not
+            } else {
+                console.log("hello", statement.getText());
+            }
         });
         if (ctx.expression() !== null) {
             this.visit(ctx.expression());
@@ -1120,6 +1154,43 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
             return;
         }
         throw new Error("Not implemented (visitArithmeticOrLogicalExpression)");
+    }
+
+    visitComparisonExpression(ctx: ComparisonExpressionContext): void {
+        this.visit(ctx.expression(0));
+        this.visit(ctx.expression(1));
+        this.bytecode.push(EQ());
+    }
+
+    visitPredicateLoopExpression(ctx: PredicateLoopExpressionContext): void {
+        this.bytecode.push(ENTER_LOOP()); // Save environment
+        const predSize = this.visitAndGetBytecodeSize(ctx.expression());
+        const jofr_addr = this.bytecode.length;
+        const jofr = JOFR(0);
+        this.bytecode.push(jofr); // Skip body on predicate false
+        if (jofr.type !== "JOFR") throw new Error("This never happens"); // For type assertion
+        this.currentLoopEnd.push(jofr_addr)
+        const loopBodySize = this.visitAndGetBytecodeSize(ctx.blockExpression());
+        jofr.skip = loopBodySize + 1; // Skip the GOTOR
+        // pc = pred_addr + predSize + 1 + loopBodySize
+        // pc + 1 + skip = pred_addr
+        // pred_addr + predSize + loopBodySize + 2 + skip = pred_addr
+        // skip = -(predSize + loopBodySize + 2)
+        this.bytecode.push(GOTOR(-(predSize + loopBodySize + 2))); // Loop back to predicate
+        this.bytecode.push(EXIT_LOOP()); // Restore environment
+    }
+
+    visitBreakExpression(ctx: BreakExpressionContext): void {
+        if (this.currentLoopEnd.length === 0) {
+            throw new Error(`break outside of a loop. Line ${ctx.start.line}`);
+        }
+        const loopEnd = this.currentLoopEnd[this.currentLoopEnd.length - 1];
+        // Hack: Push false, then jump to current loop's JOFR
+        // pc + 1 + skip = loopEnd
+        // skip = loopEnd - pc - 1
+        this.bytecode.push(LDCP(Value.fromBool(false)));
+        const pc = this.bytecode.length;
+        this.bytecode.push(GOTOR(loopEnd - pc - 1));
     }
 
     // TODO: Too naive, doesn't handle a.b.c style statements

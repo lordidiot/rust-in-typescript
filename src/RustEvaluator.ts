@@ -45,7 +45,6 @@ export class RustEvaluator extends BasicEvaluator {
             const bytecode = this.compilerVisitor.bytecode;
             const topLevelEnvSize = this.compilerVisitor.compilerEnv.locals.length;
 
-
             // Run the bytecode
             const vm = new RustVirtualMachine(bytecode, topLevelEnvSize, 1000000, this.isDebug);            if (this.isDebug) {
                 console.log("Bytecode:");
@@ -112,6 +111,13 @@ function prettyPrint(input: string): string {
 
 function prettyPrintBytecode(bytecode: Bytecode[]) {
     bytecode.forEach((inst, idx) => {
-        console.log("\t", idx, inst)
+        switch (inst.type) {
+            case "JOFR":
+            case "GOTOR":
+                console.log("\t", idx, inst, "@", idx + 1 + inst.skip)
+                break;
+            default:
+                console.log("\t", idx, inst)
+        }
     })
 }
