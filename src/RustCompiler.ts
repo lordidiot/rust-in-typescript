@@ -668,6 +668,13 @@ class BorrowChecker {
         }
     }
 
+    decrementAndCheckInLoop(name: string): void {
+        const entry = this.borrowMap.get(name);
+        if (!entry || entry === "dangling") return;
+
+        entry.lifetime--;
+    }
+
     maybeTransitionToDangling(name: string): void {
         const entry = this.borrowMap.get(name);
         if (!entry) return;
@@ -808,6 +815,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
     private usageMap: UsageMap;
     private currentFunc: string;
     private funcParms: Map<string, BorrowNode[]> = new Map();
+    private inLoop: boolean = false;
 
     constructor() {
         super();
@@ -823,6 +831,21 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             if (node instanceof PathExpressionContext) {
                 const varName = node.getText();
                 this.borrowChecker.decrementAndCheck(varName);
+            }
+        };
+        
+        visitNode(ctx);
+    }
+
+    private decrementPathExpressionsInLoop(ctx: ParseTree): void {
+        // We'll use a post-order traversal to visit all path expressions
+        const visitNode = (node: ParseTree): void => {
+            for (let i = 0; i < node.getChildCount(); i++) {
+                visitNode(node.getChild(i));
+            }
+            if (node instanceof PathExpressionContext) {
+                const varName = node.getText();
+                this.borrowChecker.decrementAndCheckInLoop(varName);
             }
         };
         
@@ -933,6 +956,44 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         }
     }
 
+    visitReturnExpression(ctx: ReturnExpressionContext): void {
+        if (!ctx.expression()) return;
+    
+        const retNodes = this.resolveExpressionType(ctx.expression());
+        const returnNode = retNodes[0]; // Get the primary return node
+    
+        // Only check reference returns
+        if (returnNode.kind === "ref" || returnNode.kind === "mutRef") {
+            const paramNodes = this.funcParms.get(this.currentFunc) || [];
+            let isParamReference = false;
+            let referencedParamName: string | null = null;
+    
+            // Check if this references any parameter
+            for (const paramNode of paramNodes) {
+                if (returnNode.id === paramNode.id) {
+                    return;
+                }
+                if (returnNode.target.id === paramNode.id) {
+                    isParamReference = true;
+                    referencedParamName = this.borrowChecker.getNameFromNode(paramNode);
+                    break;
+                }
+            }
+    
+            if (!isParamReference) {
+                // Check if it references a local variable
+                const localVarName = this.borrowChecker.getNameFromNode(returnNode.target);
+                if (localVarName) {
+                    throw new Error(`cannot return value referencing local variable \`${localVarName}\``);
+                }
+                throw new Error("cannot return reference to temporary value");
+            } else if (referencedParamName) {
+                // This is the specific error you asked for
+                throw new Error(`cannot return reference to function parameter \`${referencedParamName}\``);
+            }
+        }
+    }
+
 
     private getType(ctx: Context): RustType {
         let type = ctx.type;
@@ -955,12 +1016,20 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         ctx.statement().forEach((statement: StatementContext) => {
             this.visit(statement);
             if (!(statement.getChild(0).getChild(0) instanceof ExpressionWithBlockContext)) {
-                this.decrementPathExpressionsInStatement(statement);
+                if (this.inLoop) {
+                    this.decrementPathExpressionsInLoop(statement);
+                } else {
+                    this.decrementPathExpressionsInStatement(statement);
+                }
             }
         });
         if (ctx.expression() !== null) {
             this.visit(ctx.expression());
-            this.decrementPathExpressionsInStatement(ctx.expression());
+            if (this.inLoop) {
+                this.decrementPathExpressionsInLoop(ctx.expression());
+            } else {
+                this.decrementPathExpressionsInStatement(ctx.expression());
+            }
         }
     }
 
@@ -1124,7 +1193,12 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
     visitIfExpression(ctx: IfExpressionContext): void {
         this.visit(ctx.expression());
-        this.decrementPathExpressionsInStatement(ctx.expression());
+        if (this.inLoop) {
+            this.decrementPathExpressionsInLoop(ctx.expression());
+        } else {
+            this.decrementPathExpressionsInStatement(ctx.expression());
+        }
+        
     
         // Shallow clone is sufficient since we won't modify nodes
         const originalBorrowMap = new Map(this.borrowChecker.borrowMap);
@@ -1217,6 +1291,24 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
     
         return merged;
     }
+
+
+    visitPredicateLoopExpression(ctx: PredicateLoopExpressionContext): void {
+        this.visit(ctx.expression());
+        this.decrementPathExpressionsInLoop(ctx.expression());
+        
+        this.inLoop = true;
+        this.visit(ctx.blockExpression());
+        this.inLoop = false;
+        
+        for (const [varName, entry] of this.borrowChecker.borrowMap.entries()) {
+            if (entry === "dangling") continue;
+            if (entry.lifetime <= 0) {
+                this.borrowChecker.maybeTransitionToDangling(varName);
+            }
+        }
+    }
+
    
 
 }
