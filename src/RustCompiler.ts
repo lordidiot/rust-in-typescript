@@ -1,5 +1,5 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree, TerminalNode } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, BreakExpressionContext, CallExpressionContext, ComparisonExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, PredicateLoopExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, BreakExpressionContext, CallExpressionContext, ComparisonExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, PredicateLoopExpressionContext, ReturnExpressionContext, StatementContext, StatementsContext, Type_Context } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
 import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE, EQ, ENTER_LOOP, EXIT_LOOP } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
@@ -208,7 +208,6 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     constructor() {
         super();
-        // this.typeEnv = new TypeEnvironment();
     }
 
     private getNonTokenChildren(node: ParseTree): ParseTree[] {
@@ -279,6 +278,13 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         return ctx.type;
     }
 
+    visitReturnExpression(ctx: ReturnExpressionContext): RustType {
+        ctx.type = ctx.expression() !== null
+            ? this.visit(ctx.expression())
+            : UNIT_TYPE;
+        return ctx.type;
+    }
+
     visitCallExpression(ctx: CallExpressionContext): RustType {
         let fnType = this.visit(ctx.expression());
         if (typeof fnType === "string" || fnType.kind !== "fn") {
@@ -343,9 +349,15 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     visitStatements(ctx: StatementsContext): RustType {
         if (ctx.statement() !== null) {
-            ctx.statement().forEach((statement: StatementContext) => {
-                this.visit(statement);
-            });
+            for (const statement of ctx.statement()) {
+                const statementType = this.visit(statement);
+                const returnExpr = statement.expressionStatement()?.expression();
+                if (returnExpr instanceof ReturnExpressionContext) {
+                    // Early return, don't type remaining statements
+                    ctx.type = statementType;
+                    return ctx.type;
+                }
+            }
         }
         if (ctx.expression() !== null) {
             ctx.type = this.visit(ctx.expression());
@@ -1051,6 +1063,13 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         }
         this.bytecode.push(LDCP(Value.fromu32(fnAddress)));
         this.bytecode.push(SET(envPos.frameIndex, envPos.localIndex, 0));
+    }
+
+    visitReturnExpression(ctx: ReturnExpressionContext): void {
+        if (ctx.expression() !== null) {
+            this.visit(ctx.expression());
+        }
+        this.bytecode.push(RET());
     }
 
     visitCallExpression(ctx: CallExpressionContext): void {

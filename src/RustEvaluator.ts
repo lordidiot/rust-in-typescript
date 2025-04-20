@@ -39,7 +39,7 @@ export class RustEvaluator extends BasicEvaluator {
             
             // Compile
             if (this.isDebug) {
-                console.log(prettyPrint(tree.toStringTree(parser)));
+                // console.log(prettyPrint(tree.toStringTree(parser)));
             }
             this.compilerVisitor.visit(tree);
             const bytecode = this.compilerVisitor.bytecode;
