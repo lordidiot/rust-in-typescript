@@ -102,7 +102,7 @@ export class RustVirtualMachine {
                 const prevEnv = this.env;
                 const prevFrame = this.heap.getPairSecond(prevEnv);
                 this.env = this.heap.getPairFirst(prevEnv);
-                this.heap.freeArray(prevFrame);
+                this.heap.free(prevFrame);
                 this.heap.free(prevEnv);
                 break;
             }
@@ -116,10 +116,11 @@ export class RustVirtualMachine {
             case "EXIT_LOOP": {
                 const frame = this.runtimeStack.pop()!;
                 while (!this.env.equals(frame.savedEnv)) {
-                    this.env = this.heap.getPairFirst(this.env);
-                    // TODO: Free
-                    // this.heap.free(...);
-                    // this.heap.free(...);
+                    const nextEnv = this.heap.getPairFirst(this.env);
+                    const frame = this.heap.getPairSecond(this.env);
+                    this.heap.free(frame); // :/
+                    this.heap.free(this.env);
+                    this.env = nextEnv;
                 }
                 break;
             }
