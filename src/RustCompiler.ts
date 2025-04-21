@@ -1,7 +1,7 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree, TerminalNode } from "antlr4ng";
-import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, BreakExpressionContext, CallExpressionContext, ComparisonExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, PredicateLoopExpressionContext, ReturnExpressionContext, StatementContext, StatementsContext, Type_Context, ExpressionWithBlockContext } from "./parser/src/RustParser";
+import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, BreakExpressionContext, CallExpressionContext, ComparisonExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, PredicateLoopExpressionContext, ReturnExpressionContext, StatementContext, StatementsContext, Type_Context, ExpressionWithBlockContext, NegationExpressionContext } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
-import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE, EQ, ENTER_LOOP, EXIT_LOOP, RustVirtualMachine } from "./RustVirtualMachine";
+import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE, EQ, ENTER_LOOP, EXIT_LOOP, RustVirtualMachine, NOT } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
@@ -532,6 +532,15 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
             }
         }
         ctx.type = types[0];
+        return ctx.type;
+    }
+
+    visitNegationExpression(ctx: NegationExpressionContext): RustType {
+        const expressionType = this.visit(ctx.expression());
+        if (expressionType !== "bool") {
+            throw new Error(`mismatched types, expected \`bool\`, found ${expressionType}. Line ${ctx.start.line}`);
+        }
+        ctx.type = expressionType;
         return ctx.type;
     }
 }
@@ -1753,6 +1762,9 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         } else if (ctx.SLASH()) {
             this.bytecode.push(DIV());
             return;
+        } else if (ctx.PERCENT()) {
+            this.bytecode.push(MOD());
+            return;
         }
         throw new Error("Not implemented (visitArithmeticOrLogicalExpression)");
     }
@@ -1844,5 +1856,10 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
             gotor.skip = elseBranchSize;
         }
         jofr.skip = ifBranchSize;
+    }
+
+    visitNegationExpression(ctx: NegationExpressionContext): void {
+        this.visit(ctx.expression());
+        this.bytecode.push(NOT());
     }
 }

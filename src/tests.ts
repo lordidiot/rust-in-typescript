@@ -114,23 +114,7 @@ fn main() {
 }
 `, ["124"]);
 
-runTest("Recursion",
-`
-fn add(x: i32, y: i32) -> i32 {
-    if y == 0 {
-        return x;
-    } else {
-        return add(x + 1, y - 1);
-    }
-}
-
-fn main() {
-    let a: i32 = 32;
-    let b: i32 = 64;
-    let c: i32 = add(a, b);
-    displayi32(c);
-}
-`, ["96"]);
+runTestFromFilename("Recursion", "examples/recursion.rs", ["96"]);
 
 runTestFromFilename("Borrow checking if-else", "examples/ifelse1.rs", ["Error: cannot assign to a because it is borrowed"]);
 
@@ -155,13 +139,4 @@ fn main() {
 }
 `, ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
 
-runTest("NLL1",
-`
-fn main() {
-    let mut a: Box<i32> = Box::new(32);
-    let b: &Box<i32> = &a;
-    displayi32(**b);
-    *a = 48;
-    displayi32(*a);
-}
-`, ["32", "48"]);
+runTestFromFilename("Non-lexical lifetimes", "examples/nll.rs", ["32", "48"]);

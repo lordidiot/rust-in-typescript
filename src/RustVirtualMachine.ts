@@ -20,6 +20,7 @@ export type Bytecode =
     | { type: "DIV" }
     | { type: "MOD" }
     | { type: "EQ" }
+    | { type: "NOT" }
     | { type: "FREE", frameIndex: number, localIndex: number}
     | { type: "JOFR", skip: number } // Jump on false relative
     | { type: "GOTOR", skip: number} // Goto relative
@@ -45,6 +46,7 @@ export const MUL = (): Bytecode => ({ type: "MUL" });
 export const DIV = (): Bytecode => ({ type: "DIV" });
 export const MOD = (): Bytecode => ({ type: "MOD" });
 export const EQ = (): Bytecode => ({ type: "EQ" });
+export const NOT = (): Bytecode => ({ type: "NOT" });
 export const FREE = (frameIndex: number, localIndex: number): Bytecode => ({ type: "FREE", frameIndex, localIndex});
 export const JOFR = (skip: number): Bytecode => ({ type: "JOFR", skip });
 export const GOTOR = (skip: number): Bytecode => ({ type: "GOTOR", skip });
@@ -69,13 +71,6 @@ export class RustVirtualMachine {
         this.isDebug = isDebug;
         this.topLevelEnvSize = topLevelEnvSize;
         this.outputFn = outputFn;
-    }
-
-    private peek(): Value {
-        if (this.operandStack.length === 0) {
-            throw new Error("Operand stack is empty");
-        }
-        return this.operandStack[this.operandStack.length - 1];
     }
 
     private prettifyOperandStack(): any[] {
@@ -232,6 +227,7 @@ export class RustVirtualMachine {
                 const a = this.operandStack.pop()!;
                 if (b.asi32() === 0) throw new Error("Division by zero");
                 const res = Value.fromi32(Math.floor(a.asi32() / b.asi32()));
+                this.operandStack.push(res);
                 break;
             }
             case "MOD": {
@@ -239,6 +235,7 @@ export class RustVirtualMachine {
                 const a = this.operandStack.pop()!;
                 if (b.asi32() === 0) throw new Error("Division by zero");
                 const res = Value.fromi32(a.asi32() % b.asi32());
+                this.operandStack.push(res);
                 break;
             }
             case "EQ": {
@@ -246,6 +243,12 @@ export class RustVirtualMachine {
                 const a = this.operandStack.pop()!;
                 // Naive equality check
                 const res = Value.fromBool(a.equals(b));
+                this.operandStack.push(res);
+                break;
+            }
+            case "NOT": {
+                const a = this.operandStack.pop()!;
+                const res = Value.fromBool(!a.asBool());
                 this.operandStack.push(res);
                 break;
             }
