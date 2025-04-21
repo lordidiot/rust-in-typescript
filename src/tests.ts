@@ -98,3 +98,37 @@ fn main() {
 
 runTestFromFilename("Box basic", "examples/box.rs", ["32"]);
 
+runTest("Missing variable type",
+`
+fn main() {
+    let a = 32;
+}
+`, ["Error: Syntax error. line 3:10 mismatched input '=' expecting ':' at ="]);
+
+runTest("Function calling",
+`
+fn foo(x: i32) -> Box<i32> {
+    let b: Box<i32> = Box::new(x);
+    b
+}
+
+fn main() {
+    let a: Box<i32> = foo(123);
+    displayi32(*a + 1);
+}
+`, ["124"]);
+
+
+// runTestFromFilename("Borrow checking if-else", "examples/ifelse1.rs", []);
+
+/*
+runTest("Basic literal",
+`
+fn main() {
+    let a: i32 = 32;
+    let b: &mut i32 = &mut a;
+    *b = 64;
+    displayi32(a);
+}
+`, ["32"]);
+*/

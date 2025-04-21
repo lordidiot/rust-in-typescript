@@ -290,7 +290,6 @@ export class RustVirtualMachine {
             this.pc = this.step();
         }
         return 0;
-        // return this.operandStack.pop()!.asi32();
     }
 }
 
@@ -394,39 +393,45 @@ const HALF_WORD_SIZE = 4;
 const INT_TAG = 0;
 const PAIR_TAG = 1;
 const ARRAY_TAG = 2;
+const FREED_TAG = 255;
 class Heap {
     private data: ArrayBuffer;
     private heapTop: address = 0;
     private heapSize: number;
     private view: DataView;
-    private freeList: address[] = [];
-    private allocations: Map<address, number> = new Map(); // Track allocated blocks
+    private freeHead: address;
 
     constructor(heapSize: number) {
         this.heapSize = heapSize;
         this.data = new ArrayBuffer(heapSize);
         this.view = new DataView(this.data);
+        this.freeHead = -1; // INVALID ADDRESS
     }
 
     // Header: [1 byte tag] [4 bytes size] [3 bytes padding]
     // Automatically adds header size
     // Returns the address of the allocated memory
     allocate(tag: number, size: number): Value {
+        size = Math.max(size, WORD_SIZE); // Ensure size is at least 8 bytes
         size += WORD_SIZE; // Add header size
 
-        // First try to reuse freed blocks
-        for (let i = 0; i < this.freeList.length; i++) {
-            const candidate = this.freeList[i];
-            const candidateSize = this.view.getUint32(candidate - WORD_SIZE + 1);
-            
-            if (candidateSize >= size) {
-                // Found a suitable free block
-                this.freeList.splice(i, 1);
-                this.view.setUint8(candidate - WORD_SIZE, tag);
-                this.view.setUint32(candidate - WORD_SIZE + 1, size);
-                this.allocations.set(candidate, size);
-                return Value.fromAddress(candidate);
+        // Check freelist
+        let prev = -1;
+        let possible = this.freeHead;
+        while (possible !== -1) {
+            const possibleSize = this.view.getUint32(possible + 1);
+            const next = this.view.getInt32(possible + WORD_SIZE); // Use int32 to check for -1
+            if (possibleSize >= size) {
+                if (prev === -1) {
+                    this.freeHead = this.view.getInt32(possible + WORD_SIZE);
+                } else {
+                    this.view.setUint32(prev + WORD_SIZE, next);
+                }
+                this.view.setUint8(possible, tag);
+                return Value.fromAddress(possible + WORD_SIZE);
             }
+            prev = possible;
+            possible = next;
         }
 
         if (this.heapTop + size > this.heapSize) {
@@ -482,26 +487,12 @@ class Heap {
         return env;
     }
 
-    free(address: address): void {
-        // TODO: Doesn't do anything right now
-        // Remember to subtract header size (WORD_SIZE) from address
-        // to get the actual address in the heap
+    free(addressVal: Value): void {
+        const address = addressVal.asAddress();
         const headerAddress = address - WORD_SIZE;
-        
-        // Verify this is a valid allocation
-        if (!this.allocations.has(address)) {
-            throw new Error(`Attempt to free invalid address: ${address}`);
-        }
-        const size = this.view.getUint32(headerAddress + 1);
-        this.freeList.push(headerAddress);
-        this.allocations.delete(address);
-        
-        // Zero out the memory
-        for (let i = 0; i < size; i++) {
-            this.view.setUint8(headerAddress + i, 0);
-        }
-        
         this.view.setUint8(headerAddress, 255); // Special "freed" tag
+        this.view.setInt32(headerAddress + WORD_SIZE, this.freeHead);
+        this.freeHead = headerAddress;
     }
 
     // Helper functions

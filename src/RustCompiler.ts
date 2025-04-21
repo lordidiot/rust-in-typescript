@@ -1280,6 +1280,18 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             expr instanceof ArithmeticOrLogicalExpressionContext) {
             return false;
         }
+
+        if (expr instanceof DereferenceExpressionContext) {
+            const innerExprType = expr.expression().type;
+            if (isRef(innerExprType) && innerExprType.kind === "mutRef") {
+                // Dereference of a mutable reference is valid
+                return true;
+            } else if (innerExprType === "Box<i32>") {
+                // Dereference of a Box<i32> is valid
+                return true;
+            }
+            return false;
+        }
     
         // Default case for other expression types
         return this.isValidAssignmentTarget(expr.getChild(0));
