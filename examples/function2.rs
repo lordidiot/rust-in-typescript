@@ -3,6 +3,7 @@ fn bar(bar_arg: &bool) -> &bool {
 }
 
 fn main() {
-    let mut b : bool = false;
-    let a: &bool = bar(& b);
+    let mut b: bool = false;
+    let a: &bool = bar(&b);
+    displaybool(*a);
 }

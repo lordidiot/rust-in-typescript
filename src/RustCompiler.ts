@@ -980,6 +980,8 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
         let paramNames: string[] = [];
         let paramTypes: RustType[] = []
+        
+        let refParams: BorrowNode[] = [];
 
         if(ctx.functionParameters()) {
             const scanResults = new LocalScannerVisitor(ctx).visit(ctx);
@@ -1023,9 +1025,6 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             });
         }
         
-        let refParams: BorrowNode[] = [];
-        
-
         this.funcParms.set(this.currentFunc, refParams);
 
         // Process function body

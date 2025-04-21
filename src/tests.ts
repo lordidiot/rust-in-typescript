@@ -92,7 +92,11 @@ fn main() {
 }
 `, ["32"]);
 
+runTestFromFilename("Basic sequential constructs", "examples/basic.rs", ["0", "3", "6", "9"]);
+
 runTestFromFilename("Box basic", "examples/box.rs", ["32"]);
+
+runTestFromFilename("Basic borrowing", "examples/borrow.rs", ["32", "48", "48"]);
 
 runTest("Missing variable type",
 `
@@ -128,15 +132,6 @@ fn main() {
 }
 `, ["64"]);
 
-runTest("Mutable references (exclusive)",
-`
-fn main() {
-    let mut a: i32 = 32;
-    let b: &mut i32 = &mut a;
-    let c: &mut i32 = &mut a;
-    *b = 64;
-    displayi32(a);
-}
-`, ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
+runTestFromFilename("Mutable references (exclusive)", "examples/mutualexclusion.rs", ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
 
 runTestFromFilename("Non-lexical lifetimes", "examples/nll.rs", ["32", "48"]);

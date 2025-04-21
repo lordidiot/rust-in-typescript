@@ -194,7 +194,7 @@ export class RustVirtualMachine {
                 while (!this.env.equals(this.globalEnv)) {
                     const nextEnv = this.heap.getPairFirst(this.env);
                     const frame = this.heap.getPairSecond(this.env);
-                    this.heap.freeArray(frame);
+                    this.heap.free(frame); // :/
                     this.heap.free(this.env);
                     this.env = nextEnv;
                 }
@@ -253,17 +253,6 @@ export class RustVirtualMachine {
                 break;
             }
             case "FREE": {
-                //TODO
-
-                // const frameIndex = ins.frameIndex;
-                // const localIndex = ins.localIndex;
-                // 
-                // const addressToFree = 1;
-                // this.heap.free(addressToFree);
-                
-                // if (this.isDebug) {
-                //     console.log(`Freed memory at address: ${addressToFree}`);
-                // }
                 break;
             }
             case "JOFR": {
@@ -515,6 +504,7 @@ class Heap {
         addressSet.forEach(address => {
             this.free(Value.fromAddress(address));
         });
+        this.free(array);
     }
 
     // Helper functions
