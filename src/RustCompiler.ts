@@ -1240,7 +1240,24 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             throw new Error(`invalid left-hand side of assignment`);
         }
 
-        const name = lhs.getText();
+        let name = lhs.getText();
+
+        if (name.includes("*")) {
+            const lhsType = this.resolveExpressionType(lhs);
+            lhsType.forEach(type => {
+                if (!(type.kind === "owned" && isPrimitive(type.type))) {
+                    throw new Error(`cannot assign to ${name}`);
+                }
+                name = name.replaceAll("*", "");
+                if (!this.borrowChecker.checkIfAssignable(name)) {
+                    throw new Error(`cannot assign to ${name}`);
+                }
+                return;
+
+            });
+
+        }
+
         if (!this.borrowChecker.checkIfAssignable(name)) {
             throw new Error(`cannot assign to ${name}`);
         }
@@ -1280,9 +1297,13 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             expr instanceof ArithmeticOrLogicalExpressionContext) {
             return false;
         }
-    
+
+        if (expr instanceof DereferenceExpressionContext) {
+            return expr.getChild(1) ? this.isValidAssignmentTarget(expr.getChild(1)) : false;
+        }
+        
         // Default case for other expression types
-        return this.isValidAssignmentTarget(expr.getChild(0));
+        return expr.getChild(0) ? this.isValidAssignmentTarget(expr.getChild(0)) : false;
     }
 
     visitPathExpression(ctx: PathExpressionContext): void {
