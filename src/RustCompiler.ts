@@ -563,7 +563,13 @@ class BorrowChecker {
         if (!target) {
             throw new Error("Reference nodes must have a target");
         }
-        const newNode = { kind, target, id: this.nodeCounter++} as BorrowNode;
+        let newNode : BorrowNode;
+        if (kind === "ref") {
+            newNode = { kind, target, id: this.nodeCounter++, isMut: false};
+        } else if (kind === "mutRef") {
+            newNode = { kind, target, id: this.nodeCounter++, isMut: true};
+
+        }
         return newNode;
     }
 
@@ -626,6 +632,7 @@ class BorrowChecker {
             const varName = this.getVariableNameFromNodes(nodes);
             throw new Error(`cannot borrow ${varName} as mutable because it is also borrowed as immutable`);
         }
+
         nodes.forEach(node => {
             if (!node.isMut) {
                 const varName = this.getVariableNameFromNodes(nodes);
@@ -984,7 +991,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             paramNames.forEach((param, i) => {
                 const type = paramTypes[i];
                 if (isRef(type)) {
-                    const isMut = ctx.functionParameters().functionParam()[i].identifierPattern().KW_MUT ? true: false;
+                    const isMut = ctx.functionParameters().functionParam()[i].identifierPattern().KW_MUT() ? true: false;
                     const refnode = this.convertRustTypeToBorrowNodes(type, isMut);
                     refParams.push(refnode);
                     this.borrowChecker.declareVariable(
@@ -994,7 +1001,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
                     );
     
                 } else {
-                    const isMut = ctx.functionParameters().functionParam()[i].identifierPattern().KW_MUT ? true: false;
+                    const isMut = ctx.functionParameters().functionParam()[i].identifierPattern().KW_MUT() ? true: false;
                     const ownedNode = this.borrowChecker.createNode("owned", undefined, type, isMut);
                     this.borrowChecker.declareVariable(
                         param, 
