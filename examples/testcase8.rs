@@ -1,3 +1,4 @@
+// Error: cannot assign to a because it is borrowed
 fn main() {
     let mut a: Box<i32> = Box::new(4);
     let mut b: Box<i32> = Box::new(6);
