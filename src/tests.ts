@@ -92,11 +92,11 @@ fn main() {
 }
 `, ["32"]);
 
-runTestFromFilename("Basic sequential constructs", "examples/basic.rs", ["0", "3", "6", "9"]);
+runTestFromFilename("Basic sequential constructs", "examples/additional/basic.rs", ["0", "3", "6", "9"]);
 
-runTestFromFilename("Box basic", "examples/box.rs", ["32"]);
+runTestFromFilename("Box basic", "examples/additional/box.rs", ["32"]);
 
-runTestFromFilename("Basic borrowing", "examples/borrow.rs", ["32", "48", "48"]);
+runTestFromFilename("Basic borrowing", "examples/additional/borrow.rs", ["32", "48", "48"]);
 
 runTest("Missing variable type",
 `
@@ -118,9 +118,7 @@ fn main() {
 }
 `, ["124"]);
 
-runTestFromFilename("Recursion", "examples/recursion.rs", ["96"]);
-
-runTestFromFilename("Borrow checking if-else", "examples/ifelse1.rs", ["Error: cannot assign to a because it is borrowed"]);
+runTestFromFilename("Recursion", "examples/additional/recursion.rs", ["96"]);
 
 runTest("Mutable references",
 `
@@ -132,6 +130,18 @@ fn main() {
 }
 `, ["64"]);
 
-runTestFromFilename("Mutable references (exclusive)", "examples/mutualexclusion.rs", ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
+runTestFromFilename("Mutable references (exclusive)", "examples/additional/mutualexclusion.rs", ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
 
-runTestFromFilename("Non-lexical lifetimes", "examples/nll.rs", ["32", "48"]);
+runTestFromFilename("Non-lexical lifetimes", "examples/additional/nll.rs", ["32", "48"]);
+
+// Run all 10 testcases
+runTestFromFilename("Testcase 1", "examples/testcase1.rs", ["0", "3", "6", "9"]);
+runTestFromFilename("Testcase 2", "examples/testcase2.rs", ["123"]);
+runTestFromFilename("Testcase 3", "examples/testcase3.rs", ["96"]);
+runTestFromFilename("Testcase 4", "examples/testcase4.rs", ["32", "48", "48"]);
+runTestFromFilename("Testcase 5", "examples/testcase5.rs", ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
+runTestFromFilename("Testcase 6", "examples/testcase6.rs", ["32", "48"]);
+runTestFromFilename("Testcase 7", "examples/testcase7.rs", ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
+runTestFromFilename("Testcase 8", "examples/testcase8.rs", ["Error: cannot assign to a because it is borrowed"]);
+runTestFromFilename("Testcase 9", "examples/testcase9.rs", ["1"]);
+runTestFromFilename("Testcase 10", "examples/testcase10.rs", ["4"]);
