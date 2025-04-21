@@ -839,6 +839,7 @@ type_
     : identifier
     | unit_type
     | referenceType
+    | box_type
 //    : typeNoBounds
 //    | implTraitType
 //    | traitObjectType
@@ -846,6 +847,10 @@ type_
 
 unit_type
     : LPAREN WHITESPACE* RPAREN
+    ;
+
+box_type
+    : BOX_I32
     ;
 
 typeNoBounds

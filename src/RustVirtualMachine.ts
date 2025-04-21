@@ -1,4 +1,5 @@
 import { notStrictEqual } from "assert";
+import { BUILTIN_FUNCTIONS } from "./RustCompiler";
 
 export type Bytecode = 
     | { type: "POP" }
@@ -11,7 +12,7 @@ export type Bytecode =
     | { type: "GET", frameIndex: number, localIndex: number, indirection: number }
     | { type: "DEREF" }
     | { type: "WRITE" }
-    | { type: "CALL" }
+    | { type: "CALL", builtin: string | null }
     | { type: "RET" }
     | { type: "ADD" }
     | { type: "SUB" }
@@ -36,7 +37,7 @@ export const GET = (frameIndex: number, localIndex: number, indirection: number)
     ({ type: "GET", frameIndex, localIndex, indirection });
 export const DEREF = (): Bytecode => ({ type: "DEREF" });
 export const WRITE = (): Bytecode => ({ type: "WRITE" });
-export const CALL = (): Bytecode => ({ type: "CALL" });
+export const CALL = (builtin: string | null = null): Bytecode => ({ type: "CALL", builtin});
 export const RET = (): Bytecode => ({ type: "RET" });
 export const ADD = (): Bytecode => ({ type: "ADD" });
 export const SUB = (): Bytecode => ({ type: "SUB" });
@@ -50,11 +51,11 @@ export const GOTOR = (skip: number): Bytecode => ({ type: "GOTOR", skip });
 export const DONE = (): Bytecode => ({ type: "DONE" });
 
 export class RustVirtualMachine {
-    private operandStack: Value[];
+    operandStack: Value[];
     private runtimeStack: RuntimeFrame[]; // TODO(IMPT): This should be inside the heap
     private bytecode: Bytecode[];
     private pc: number;
-    private heap: Heap;
+    heap: Heap;
     private heapSize: number;
     private env: Value;
     private isDebug: boolean;
@@ -176,6 +177,12 @@ export class RustVirtualMachine {
                 break;
             }
             case "CALL": {
+                // Special-case builtin function
+                if (ins.builtin !== null) {
+                    const builtin = BUILTIN_FUNCTIONS[ins.builtin];
+                    builtin.fn(this);
+                    return this.pc + 1;
+                }
                 const callPc = this.operandStack.pop()!; // TODO: Check?
                 this.runtimeStack.push({
                     savedPc: this.pc + 1,
@@ -431,12 +438,12 @@ class Heap {
     }
 
     // [8 bytes value]
-    /*
     allocateInt(): Value {
         const address = this.allocate(INT_TAG, WORD_SIZE);
         return address;
     }
 
+    /*
     allocatei32(value: number): address {
         const address = this.allocateInt();
         this.view.setInt32(address, value);

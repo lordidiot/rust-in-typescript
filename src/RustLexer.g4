@@ -270,3 +270,5 @@ LSQUAREBRACKET : '[';
 RSQUAREBRACKET : ']';
 LPAREN         : '(';
 RPAREN         : ')';
+
+BOX_I32 : 'Box<i32>';

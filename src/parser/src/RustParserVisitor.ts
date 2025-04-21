@@ -179,6 +179,7 @@ import { SlicePatternItemsContext } from "./RustParser.js";
 import { PathPatternContext } from "./RustParser.js";
 import { Type_Context } from "./RustParser.js";
 import { Unit_typeContext } from "./RustParser.js";
+import { Box_typeContext } from "./RustParser.js";
 import { TypeNoBoundsContext } from "./RustParser.js";
 import { ParenthesizedTypeContext } from "./RustParser.js";
 import { NeverTypeContext } from "./RustParser.js";
@@ -1331,6 +1332,12 @@ export class RustParserVisitor<Result> extends AbstractParseTreeVisitor<Result> 
      * @return the visitor result
      */
     visitUnit_type?: (ctx: Unit_typeContext) => Result;
+    /**
+     * Visit a parse tree produced by `RustParser.box_type`.
+     * @param ctx the parse tree
+     * @return the visitor result
+     */
+    visitBox_type?: (ctx: Box_typeContext) => Result;
     /**
      * Visit a parse tree produced by `RustParser.typeNoBounds`.
      * @param ctx the parse tree

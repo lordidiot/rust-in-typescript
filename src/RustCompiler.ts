@@ -1,7 +1,7 @@
 import { AbstractParseTreeVisitor, ParserRuleContext, ParseTree, TerminalNode } from "antlr4ng";
 import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, BlockExpressionContext, BorrowExpressionContext, BreakExpressionContext, CallExpressionContext, ComparisonExpressionContext, CrateContext, DereferenceExpressionContext, ExpressionContext, Function_Context, IfExpressionContext, LetStatementContext, LiteralExpression_Context, LiteralExpressionContext, LoopExpressionContext, MatchExpressionContext, PathExpression_Context, PathExpressionContext, PredicateLoopExpressionContext, ReturnExpressionContext, StatementContext, StatementsContext, Type_Context, ExpressionWithBlockContext } from "./parser/src/RustParser";
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
-import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE, EQ, ENTER_LOOP, EXIT_LOOP } from "./RustVirtualMachine";
+import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE, EQ, ENTER_LOOP, EXIT_LOOP, RustVirtualMachine } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
 import { Context, createContext } from "vm";
 import { stringify } from "querystring";
@@ -21,10 +21,12 @@ const UNIT_TYPE = "()"
 interface Ref { kind: "ref"; target: RustType; }
 interface MutRef { kind: "mutRef"; target: RustType; }
 type FnType = { kind: "fn"; paramNames: string[], paramTypes: RustType[]; ret: RustType };
-type PrimitiveType = "i32" | "u32" | "()" | "bool";
+type PrimitiveType = "i32" | "()" | "bool";
+type OwnedType = "Box<i32>";
 type RustType =
   | FnType
   | PrimitiveType 
+  | OwnedType
   | Ref
   | MutRef;
 
@@ -51,18 +53,25 @@ function typeEqual(a: RustType, b: RustType): boolean {
 }
 
 function isPrimitive(type: RustType): type is PrimitiveType {
-    return typeof type === "string";
+    return typeof type === "string" && !isOwned(type);
+}
+
+function isOwned(type: RustType): type is OwnedType {
+    return type === "Box<i32>";
 }
 
 function isRef(type: RustType): type is Ref | MutRef {
-    return !isPrimitive(type) && (type.kind === "ref" || type.kind === "mutRef");
+    return !isPrimitive(type) && !isOwned(type) && (type.kind === "ref" || type.kind === "mutRef");
 }
 
+function isFnType(type: RustType): type is FnType {
+    return !isPrimitive(type) && !isOwned(type) && type.kind === "fn";
+}
 
 function isCopySemantics(type: RustType): boolean {
     // Only primitive types (i32, u32, and unit)
     // and immutable references are copy semantics
-    return isPrimitive(type) || type.kind == "ref";
+    return isPrimitive(type) || (!isOwned(type) && type.kind == "ref");
 }
 
 function isMoveSemantics(type: RustType): boolean {
@@ -75,6 +84,22 @@ type ScanResults = {
     types: RustType[];
 }
 const EMPTY_SCAN_RESULTS: ScanResults = { names: [], types: [] };
+export const BUILTIN_FUNCTIONS = {
+    "Box::new": {
+        fn: (vm: RustVirtualMachine) => {
+            const value = vm.operandStack.pop()!; // Arg1
+            const address = vm.heap.allocateInt();
+            vm.heap.setValue(address, value);
+            vm.operandStack.push(address); // Return value
+        },
+        type: {
+            kind: "fn",
+            paramNames: ["value"],
+            paramTypes: ["i32"],
+            ret: "Box<i32>"
+        }
+    },
+}
 
 class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implements RustParserVisitor<ScanResults> {
     selfContext: ParserRuleContext;
@@ -157,6 +182,8 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
             return { kind: "ref", target: this.parseType(ctx.referenceType().type_()) };
         } else if (ctx.identifier()) {
             return ctx.identifier().getText() as PrimitiveType;
+        } else if (ctx.box_type()) {
+            return "Box<i32>";
         }
     }
 
@@ -262,7 +289,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
     visitFunction_(ctx: Function_Context): RustType {
         const name = ctx.identifier().getText();
         const fnType = this.typeEnv.lookupType(name);
-        if (typeof fnType === "string" || fnType.kind !== "fn") {
+        if (!isFnType(fnType)) {
             throw new Error(`Something wrong, expected function type, found ${JSON.stringify(fnType)}. Line ${ctx.start.line}`);
         }
         const bodyType = this.withNewEnvironment(ctx, () => {
@@ -287,7 +314,7 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     visitCallExpression(ctx: CallExpressionContext): RustType {
         let fnType = this.visit(ctx.expression());
-        if (typeof fnType === "string" || fnType.kind !== "fn") {
+        if (!isFnType(fnType)) {
             throw new Error(`expected function, found ${JSON.stringify(fnType)}. Line ${ctx.start.line}`);
         }
         const argTypes =
@@ -376,7 +403,9 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 
     visitPathExpression(ctx: PathExpressionContext): RustType {
         const name = ctx.getText();
-        const type = this.typeEnv.lookupType(name);
+        const type = (name in BUILTIN_FUNCTIONS)
+            ? BUILTIN_FUNCTIONS[name].type
+            : this.typeEnv.lookupType(name);
         if (type === null) {
             throw new Error(`Variable ${name} not found in environment, this should not happen`);
         }
@@ -455,6 +484,9 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
         const expressionType = this.visit(ctx.expression());
         if (isRef(expressionType)) {
             ctx.type = expressionType.target;
+            return ctx.type;
+        } else if (expressionType === "Box<i32>") {
+            ctx.type = "i32";
             return ctx.type;
         }
         throw new Error(`type ${expressionType} cannot be dereferenced. Line ${ctx.start.line}`);
@@ -898,7 +930,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
             const fnType = scanResults.types[0];
 
-            if (isPrimitive(fnType) || fnType.kind !== "fn") {
+            if (!isFnType(fnType)) {
                 throw new Error(`Should not happen`);
             }
 
@@ -1359,9 +1391,6 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             }
         }
     }
-
-   
-
 }
 
 
@@ -1488,7 +1517,7 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         const fnAddress = this.bytecode.length;
         const name = ctx.identifier().getText();
         const fnType = this.typeEnv.lookupType(name);
-        if (isPrimitive(fnType) || fnType.kind !== "fn") {
+        if (!isFnType(fnType)) {
             throw new Error(`Something wrong, expected function type, found ${JSON.stringify(fnType)}. Line ${ctx.start.line}`);
         }
         this.withNewEnvironment(ctx, () => {
@@ -1527,8 +1556,14 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
                 this.visit(expr);
             });
         }
-        this.visit(ctx.expression());
-        this.bytecode.push(CALL());
+        // Special case for builtin functions
+        if (ctx.expression().getText() in BUILTIN_FUNCTIONS) {
+            const builtinName = ctx.expression().getText();
+            this.bytecode.push(CALL(builtinName));
+        } else {
+            this.visit(ctx.expression());
+            this.bytecode.push(CALL());
+        }
     }
 
     visitBlockExpression(ctx: BlockExpressionContext): void {
