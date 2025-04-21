@@ -45,14 +45,15 @@ export class RustEvaluator extends BasicEvaluator {
             const topLevelEnvSize = this.compilerVisitor.compilerEnv.locals.length;
 
             // Run the bytecode
-            const vm = new RustVirtualMachine(bytecode, topLevelEnvSize, 1000000, this.isDebug);            if (this.isDebug) {
+            const outputFn = (output: string) => {
+                this.conductor.sendOutput(output);
+            }
+            const vm = new RustVirtualMachine(bytecode, topLevelEnvSize, 1000000, this.isDebug, outputFn);
+            if (this.isDebug) {
                 console.log("Bytecode:");
                 prettyPrintBytecode(bytecode);
             }
-            const result = vm.run();
-
-            // Send the result to the REPL
-            this.conductor.sendOutput(`Result of expression: ${result}`);
+            vm.run();
         }  catch (error) {
             // Handle errors and send them to the REPL
             // Print stack trace for debugging

@@ -3,8 +3,6 @@ import { ArithmeticOrLogicalExpressionContext, AssignmentExpressionContext, Bloc
 import { RustParserVisitor } from "./parser/src/RustParserVisitor";
 import { Bytecode, ADD, SUB, MUL, DIV, MOD, ENTER_SCOPE, EXIT_SCOPE, GET, SET, POP, FREE, DEREF, WRITE, LDCP, Value, JOFR, GOTOR, RET, CALL, DONE, EQ, ENTER_LOOP, EXIT_LOOP, RustVirtualMachine } from "./RustVirtualMachine";
 import { cloneDeep } from "lodash-es";
-import { Context, createContext } from "vm";
-import { stringify } from "querystring";
 
 // https://www.digitalocean.com/community/tutorials/typescript-module-augmentation
 declare module "antlr4ng" {
@@ -97,6 +95,30 @@ export const BUILTIN_FUNCTIONS = {
             paramNames: ["value"],
             paramTypes: ["i32"],
             ret: "Box<i32>"
+        }
+    },
+    "displayi32": {
+        fn: (vm: RustVirtualMachine) => {
+            const value = vm.operandStack.pop()!; // Arg1
+            vm.outputFn(value.asi32().toString());
+        },
+        type: {
+            kind: "fn",
+            paramNames: ["value"],
+            paramTypes: ["i32"],
+            ret: UNIT_TYPE
+        }
+    },
+    "displaybool": {
+        fn: (vm: RustVirtualMachine) => {
+            const value = vm.operandStack.pop()!; // Arg1
+            vm.outputFn(value.asBool().toString());
+        },
+        type: {
+            kind: "fn",
+            paramNames: ["value"],
+            paramTypes: ["bool"],
+            ret: UNIT_TYPE
         }
     },
 }
@@ -1049,7 +1071,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
     }
 
 
-    private getType(ctx: Context): RustType {
+    private getType(ctx: ParseTree): RustType {
         let type = ctx.type;
         if (type === undefined) {
             type = this.getType(ctx.getChild(0));
@@ -1165,12 +1187,16 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
     
     private handleDereferenceExpression(expr: DereferenceExpressionContext): BorrowNode[]  {  
         const borrowNode = this.resolveExpressionType(expr.expression());
-        let returnNodes: BorrowNode[];
+        let returnNodes: BorrowNode[] = [];
 
         borrowNode.forEach(node => {
             if (!node) {
                 throw new Error(`cannot find variable in scope`);
             } else if (node.kind == "owned") {
+                if (node.type === "Box<i32>") { // Special case for Box
+                    returnNodes.push(this.borrowChecker.createNode("owned", undefined, "i32"));
+                    return
+                }
                 throw new Error(`cannot dereference owned value`);
             } else if(!node.target) {
                 throw new Error(`cannot dereference moved value`);
@@ -1577,8 +1603,6 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
             this.visit(statement);
             if (statement.type !== UNIT_TYPE) {
                 this.bytecode.push(POP()); // TODO: Whether to free or not
-            } else {
-                console.log("hello", statement.getText());
             }
         });
         if (ctx.expression() !== null) {

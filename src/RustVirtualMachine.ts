@@ -60,12 +60,14 @@ export class RustVirtualMachine {
     private env: Value;
     private isDebug: boolean;
     private topLevelEnvSize: number;
+    outputFn: (output: string) => void;
 
-    constructor(bytecode: Bytecode[], topLevelEnvSize: number, heapSize: number = 1000000, isDebug: boolean = false) {
+    constructor(bytecode: Bytecode[], topLevelEnvSize: number, heapSize: number = 1000000, isDebug: boolean = false, outputFn: (output: string) => void) {
         this.bytecode = bytecode;
         this.heapSize = heapSize;
         this.isDebug = isDebug;
         this.topLevelEnvSize = topLevelEnvSize;
+        this.outputFn = outputFn;
     }
 
     private peek(): Value {
