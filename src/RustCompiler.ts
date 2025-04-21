@@ -151,7 +151,7 @@ class LocalScannerVisitor extends AbstractParseTreeVisitor<ScanResults> implemen
         let paramTypes = [];
         if (ctx.functionParameters() !== null) {
             ctx.functionParameters().functionParam().forEach((param) => {
-                paramNames.push(param.identifier().getText());
+                paramNames.push(param.identifierPattern().identifier().getText());
                 paramTypes.push(this.parseType(param.type_()));
             });
         }
@@ -537,9 +537,9 @@ export class RustTypeCheckerVisitor extends AbstractParseTreeVisitor<RustType> i
 }
 
 type BorrowNode = 
-    | { kind: "owned", type: RustType, id: number }
-    | { kind: "ref", target: BorrowNode, id: number }
-    | { kind: "mutRef", target: BorrowNode, id: number };
+    | { kind: "owned", type: RustType, id: number, isMut: false }
+    | { kind: "ref", target: BorrowNode, id: number, isMut: false }
+    | { kind: "mutRef", target: BorrowNode, id: number, isMut: true };
 
 type BorrowNodeEntry = 
     | { type: BorrowNode[]; lifetime: number } 
@@ -552,18 +552,18 @@ class BorrowChecker {
     private nodeCounter: number = 0;
 
     // Helper function to create a new unique node
-    createNode(kind: "owned" | "ref" | "mutRef", target?: BorrowNode, type?: RustType): BorrowNode {
+    createNode(kind: "owned" | "ref" | "mutRef", target?: BorrowNode, type?: RustType, isMut?: boolean): BorrowNode {
         if (kind === "owned") {
             if (!type) {
                 throw new Error("Owned nodes must have a type");
             }
-            const newNode = { kind: "owned", type: type, id: this.nodeCounter++} as BorrowNode;
+            const newNode = { kind: "owned", type: type, id: this.nodeCounter++, isMut: isMut} as BorrowNode;
             return newNode;
         }
         if (!target) {
             throw new Error("Reference nodes must have a target");
         }
-        const newNode = { kind, target, id: this.nodeCounter++ } as BorrowNode;
+        const newNode = { kind, target, id: this.nodeCounter++} as BorrowNode;
         return newNode;
     }
 
@@ -626,6 +626,12 @@ class BorrowChecker {
             const varName = this.getVariableNameFromNodes(nodes);
             throw new Error(`cannot borrow ${varName} as mutable because it is also borrowed as immutable`);
         }
+        nodes.forEach(node => {
+            if (!node.isMut) {
+                const varName = this.getVariableNameFromNodes(nodes);
+                throw new Error(`cannot borrow ${varName} as mutable, as it is not declared as mutable`);
+            }
+        });
 
         // Create new mutable reference node pointing to each input node
         return nodes.map(node => this.createNode("mutRef", node));
@@ -696,10 +702,14 @@ class BorrowChecker {
         } else if (entry === "dangling") {
             return true;
         }
-
         if (this.hasActiveBorrow(entry.type)) {
             throw new Error(`cannot assign to ${name} because it is borrowed`);
         }
+        entry.type.forEach(t => {
+            if (!t.isMut) {
+                throw new Error(`cannot assign twice to immutable variable  ${name}`);
+            }
+        });
         
         return true;
     }
@@ -970,33 +980,35 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
             paramNames = fnType.paramNames; 
             paramTypes = fnType.paramTypes;
+
+            paramNames.forEach((param, i) => {
+                const type = paramTypes[i];
+                if (isRef(type)) {
+                    const isMut = ctx.functionParameters().functionParam()[i].identifierPattern().KW_MUT ? true: false;
+                    const refnode = this.convertRustTypeToBorrowNodes(type, isMut);
+                    refParams.push(refnode);
+                    this.borrowChecker.declareVariable(
+                        param, 
+                        [refnode], 
+                        this.usageMap.get(param) || 1
+                    );
+    
+                } else {
+                    const isMut = ctx.functionParameters().functionParam()[i].identifierPattern().KW_MUT ? true: false;
+                    const ownedNode = this.borrowChecker.createNode("owned", undefined, type, isMut);
+                    this.borrowChecker.declareVariable(
+                        param, 
+                        [ownedNode], 
+                        this.usageMap.get(param) || 1
+                    );
+                    
+                }
+                
+            });
         }
         
         let refParams: BorrowNode[] = [];
         
-        
-        paramNames.forEach((param, i) => {
-            const type = paramTypes[i];
-            if (isRef(type)) {
-                const refnode = this.convertRustTypeToBorrowNodes(type);
-                refParams.push(refnode);
-                this.borrowChecker.declareVariable(
-                    param, 
-                    [refnode], 
-                    this.usageMap.get(param) || 1
-                );
-
-            } else {
-                const ownedNode = this.borrowChecker.createNode("owned", undefined, type);
-                this.borrowChecker.declareVariable(
-                    param, 
-                    [ownedNode], 
-                    this.usageMap.get(param) || 1
-                );
-                
-            }
-            
-        });
 
         this.funcParms.set(this.currentFunc, refParams);
 
@@ -1017,10 +1029,10 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
     }
     
     // Helper function to recursively convert RustType to BorrowNodes
-    private convertRustTypeToBorrowNodes(type: RustType): BorrowNode {
+    private convertRustTypeToBorrowNodes(type: RustType, isMut: boolean = false): BorrowNode {
         if (typeof type === "string") {
             // Primitive types become owned nodes
-            return this.borrowChecker.createNode("owned", undefined, type);
+            return this.borrowChecker.createNode("owned", undefined, type, isMut);
         }
     
         switch (type.kind) {
@@ -1136,6 +1148,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
     visitLetStatement(ctx: LetStatementContext): void {
         const name = ctx.identifierPattern().identifier().getText();
+        const isMut = ctx.identifierPattern().KW_MUT() ? true : false;
         
         if (!ctx.expression()){
             this.borrowChecker.declareVariable(name, [], this.usageMap.get(name));
@@ -1148,7 +1161,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         this.visit(expr);
         
         // Handle the expression recursively
-        let borrowType = this.resolveExpressionType(expr);
+        let borrowType = this.resolveExpressionType(expr, isMut);
 
         if(borrowType[0].kind === "owned" && isMoveSemantics(borrowType[0].type) || borrowType[0].kind === "mutRef") {
             borrowType = this.borrowChecker.move(borrowType);
@@ -1159,7 +1172,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         }
     }
     
-    private resolveExpressionType(expr: ParseTree): BorrowNode[] | undefined {
+    private resolveExpressionType(expr: ParseTree, isMut: boolean = false): BorrowNode[] | undefined {
         if (expr instanceof BorrowExpressionContext) {
             return this.handleBorrowExpression(expr);
         }
@@ -1170,14 +1183,14 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             return this.handlePathExpression_(expr);
         }
         else if (expr instanceof DereferenceExpressionContext) {
-            return this.handleDereferenceExpression(expr);
+            return this.handleDereferenceExpression(expr, isMut);
         }
         else if (expr instanceof CallExpressionContext) {
-            return this.handleCallExpression(expr);
+            return this.handleCallExpression(expr, isMut);
         } else if (expr instanceof LiteralExpressionContext || ArithmeticOrLogicalExpressionContext) {
             const type = this.getType(expr);
             if (isPrimitive(type)) {
-                const borrowNode = this.borrowChecker.createNode("owned", undefined, type);
+                const borrowNode = this.borrowChecker.createNode("owned", undefined, type, isMut);
                 return [borrowNode];
             }
         }
@@ -1210,7 +1223,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         return this.borrowChecker.getNodes(name);
     }
     
-    private handleDereferenceExpression(expr: DereferenceExpressionContext): BorrowNode[]  {  
+    private handleDereferenceExpression(expr: DereferenceExpressionContext, isMut: boolean = false): BorrowNode[]  {  
         const borrowNode = this.resolveExpressionType(expr.expression());
         let returnNodes: BorrowNode[] = [];
 
@@ -1219,7 +1232,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
                 throw new Error(`cannot find variable in scope`);
             } else if (node.kind == "owned") {
                 if (node.type === "Box<i32>") { // Special case for Box
-                    returnNodes.push(this.borrowChecker.createNode("owned", undefined, "i32"));
+                    returnNodes.push(this.borrowChecker.createNode("owned", undefined, "i32", isMut));
                     return
                 }
                 throw new Error(`cannot dereference owned value`);
@@ -1233,7 +1246,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         return returnNodes;
     }
     
-    private handleCallExpression(expr: CallExpressionContext): BorrowNode[] {
+    private handleCallExpression(expr: CallExpressionContext, isMut:boolean = false): BorrowNode[] {
         const retType = expr.type;
 
         if (isRef(retType)) {
@@ -1253,7 +1266,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
             }
             return returnNodes;
         } 
-        return [this.borrowChecker.createNode("owned", undefined, retType)];
+        return [this.borrowChecker.createNode("owned", undefined, retType, isMut)];
         
     }
 
@@ -1280,13 +1293,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
                 return;
 
             });
-
         }
-
-        if (!this.borrowChecker.checkIfAssignable(name)) {
-            throw new Error(`cannot assign to ${name}`);
-        }
-
         
         if (!ctx.expression(1)) return;
         
@@ -1296,6 +1303,10 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         
         // Handle the expression recursively
         let borrowType = this.resolveExpressionType(expr);
+
+        if (!this.borrowChecker.checkIfAssignable(name)) {
+            throw new Error(`cannot assign to ${name}`);
+        }
 
         if(borrowType[0].kind === "owned" && isMoveSemantics(borrowType[0].type) || borrowType[0].kind === "mutRef") {
             borrowType = this.borrowChecker.move(borrowType);

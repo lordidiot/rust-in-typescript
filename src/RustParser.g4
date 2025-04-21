@@ -227,7 +227,7 @@ typedSelf
     ;
 
 functionParam
-    : identifier COLON type_
+    : identifierPattern COLON type_
     ;
 
 functionParamPattern

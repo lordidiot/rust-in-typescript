@@ -2129,7 +2129,7 @@ export class RustParser extends RustParserBase {
             this.state = 705;
             this.errorHandler.sync(this);
             _la = this.tokenStream.LA(1);
-            if (((((_la - 54)) & ~0x1F) === 0 && ((1 << (_la - 54)) & 25) !== 0)) {
+            if (_la === 20 || _la === 22 || ((((_la - 54)) & ~0x1F) === 0 && ((1 << (_la - 54)) & 25) !== 0)) {
                 {
                 this.state = 704;
                 this.functionParameters();
@@ -2472,7 +2472,7 @@ export class RustParser extends RustParserBase {
             this.enterOuterAlt(localContext, 1);
             {
             this.state = 769;
-            this.identifier();
+            this.identifierPattern();
             this.state = 770;
             this.match(RustParser.COLON);
             this.state = 771;
@@ -11913,7 +11913,7 @@ export class RustParser extends RustParserBase {
         759,5,20,0,0,758,757,1,0,0,0,758,759,1,0,0,0,759,760,1,0,0,0,760,
         761,5,24,0,0,761,63,1,0,0,0,762,764,5,20,0,0,763,762,1,0,0,0,763,
         764,1,0,0,0,764,765,1,0,0,0,765,766,5,24,0,0,766,767,5,117,0,0,767,
-        768,3,284,142,0,768,65,1,0,0,0,769,770,3,380,190,0,770,771,5,117,
+        768,3,284,142,0,768,65,1,0,0,0,769,770,3,248,124,0,770,771,5,117,
         0,0,771,772,3,284,142,0,772,67,1,0,0,0,773,774,3,240,120,0,774,777,
         5,117,0,0,775,778,3,284,142,0,776,778,5,113,0,0,777,775,1,0,0,0,
         777,776,1,0,0,0,778,69,1,0,0,0,779,780,5,119,0,0,780,781,3,284,142,
@@ -14005,8 +14005,8 @@ export class FunctionParamContext extends antlr.ParserRuleContext {
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
     }
-    public identifier(): IdentifierContext {
-        return this.getRuleContext(0, IdentifierContext)!;
+    public identifierPattern(): IdentifierPatternContext {
+        return this.getRuleContext(0, IdentifierPatternContext)!;
     }
     public COLON(): antlr.TerminalNode {
         return this.getToken(RustParser.COLON, 0)!;
