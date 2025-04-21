@@ -8,10 +8,23 @@ import { ModuleClass } from "conductor/dist/conductor/module/types/ModuleClass";
 import { PluginClass } from "conductor/dist/conduit/types";
 import { RustEvaluator } from "./RustEvaluator";
 
-// Simple console-based runner plugin
-class ConsoleRunner implements IRunnerPlugin {
+class TestRunner implements IRunnerPlugin {
+    private outputs: string[];
+
+    constructor() {
+        this.outputs = [];
+    }
+
     sendOutput(output: string): void {
-        console.log(output);
+        this.outputs.push(output);
+    }
+
+    getOutputs(): string[] {
+        return this.outputs;
+    }
+
+    clearOutputs(): void {
+        this.outputs = [];
     }
 
     // Other methods from IRunnerPlugin that we don't need
@@ -49,22 +62,39 @@ class ConsoleRunner implements IRunnerPlugin {
     }
 }
 
-const isDebug = process.argv.indexOf("--debug") !== -1;
-const argv = process.argv.filter(arg => !arg.startsWith("-"));
-const filename = argv.at(-1);
+const runner = new TestRunner();
+const evaluator = new RustEvaluator(runner, false);
 
-if (!filename) {
-    console.error("Usage: node cli.js [--debug] <filename>");
-    process.exit(1);
+function runTest(testName: string, code: string, expectedOutput: string[]) {
+    runner.clearOutputs();
+    evaluator.evaluateChunk(code);
+    const outputs = runner.getOutputs();
+    if (JSON.stringify(outputs) === JSON.stringify(expectedOutput)) {
+        console.log(`[${testName}] passed`);
+    } else {
+        console.log(`[${testName}] failed`);
+        console.log("Expected:", expectedOutput);
+        console.log("Got:", outputs);
+        console.log("")
+    }
 }
 
-const runner = new ConsoleRunner();
-const evaluator = new RustEvaluator(runner, isDebug);
+function runTestFromFilename(testName: string, filename: string, expectedOutput: string[]) {
+    fs.readFile(filename, "utf-8", (err, data) => {
+        if (err) {
+            console.error("Error reading file:", err.message);
+        } else {
+            runTest(testName, data, expectedOutput);
+        }
+    });
+}
 
-fs.readFile(filename, "utf-8", (err, data) => {
-    if (err) {
-        console.error("Error reading file:", err.message);
-    } else {
-        evaluator.evaluateChunk(data);
-    }
-});
+runTest("Basic literal",
+`
+fn main() {
+    displayi32(32);
+}
+`, ["32"]);
+
+runTestFromFilename("Box basic", "examples/box.rs", ["32"]);
+

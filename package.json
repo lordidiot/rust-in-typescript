@@ -6,6 +6,7 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
+    "tests": "tsx src/tests.ts",
     "build": "rollup -c",
     "generate-parser": "antlr4ng -Dlanguage=TypeScript -visitor -o src/parser src/RustLexer.g4 && cp src/parser/src/RustLexer.tokens src/ && antlr4ng -Dlanguage=TypeScript -visitor -o src/parser src/RustParser.g4 && rm src/RustLexer.tokens && git apply parser_base.patch",
     "serve": "serve dist --no-clipboard --cors",
