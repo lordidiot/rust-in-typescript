@@ -1647,7 +1647,6 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
             this.visitLValueExpression(ctx.expression());
             this.bytecode.push(DEREF());
         } else {
-            console.log(ctx);
             throw new Error(`Invalid left-hand side of assignment: ${ctx.getText()}`);
         }
     }
@@ -1746,6 +1745,12 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         const name = ctx.getText();
         const pos = this.compilerEnv.lookupPosition(name);
         this.bytecode.push(GET(pos.frameIndex, pos.localIndex, 0)); // TODO: Indirection should depend on type
+        // Hopefully doesn't break
+        // Clear if a move occurs
+        if (isOwned(ctx.type) && !(ctx.parent instanceof DereferenceExpressionContext)) {
+            this.bytecode.push(LDCP(Value.fromu32(0)));
+            this.bytecode.push(SET(pos.frameIndex, pos.localIndex, 0));
+        }
     }
 
     visitLiteralExpression(ctx: LiteralExpressionContext): void {

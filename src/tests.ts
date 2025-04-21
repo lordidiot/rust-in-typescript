@@ -119,7 +119,7 @@ fn main() {
 }
 `, ["124"]);
 
-runTest("Function calling",
+runTest("Recursion",
 `
 fn add(x: i32, y: i32) -> i32 {
     if y == 0 {

@@ -105,10 +105,10 @@ export class RustVirtualMachine {
             }
             case "EXIT_SCOPE": {
                 const prevEnv = this.env;
-                this.env = this.heap.getPairFirst(this.env);
-                // TODO
-                // free(this.heap.getPairSecond(prevEnv))
-                // free(prevEnv)
+                const prevFrame = this.heap.getPairSecond(prevEnv);
+                this.env = this.heap.getPairFirst(prevEnv);
+                this.heap.freeArray(prevFrame);
+                this.heap.free(prevEnv);
                 break;
             }
             case "ENTER_LOOP": {
@@ -197,10 +197,11 @@ export class RustVirtualMachine {
             case "RET": {
                 const frame = this.runtimeStack.pop()!;
                 while (!this.env.equals(this.globalEnv)) {
-                    this.env = this.heap.getPairFirst(this.env);
-                    // TODO: Free
-                    // this.heap.free(...);
-                    // this.heap.free(...);
+                    const nextEnv = this.heap.getPairFirst(this.env);
+                    const frame = this.heap.getPairSecond(this.env);
+                    this.heap.freeArray(frame);
+                    this.heap.free(this.env);
+                    this.env = nextEnv;
                 }
                 this.env = frame.savedEnv;
                 return frame.savedPc;
@@ -497,6 +498,20 @@ class Heap {
         this.view.setUint8(headerAddress, 255); // Special "freed" tag
         this.view.setInt32(headerAddress + WORD_SIZE, this.freeHead);
         this.freeHead = headerAddress;
+    }
+
+    freeArray(array: Value): void {
+        const length = this.getArrayLength(array);
+        let addressSet: Set<number> = new Set();
+        for (let i = 0; i < length; i++) {
+            const element = this.getArrayElement(array, i);
+            if (element.isAddress()) {
+                addressSet.add(element.asAddress());
+            }
+        }
+        addressSet.forEach(address => {
+            this.free(Value.fromAddress(address));
+        });
     }
 
     // Helper functions
