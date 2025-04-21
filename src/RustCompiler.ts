@@ -1287,6 +1287,7 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
 
         let name = lhs.getText();
 
+        let isDeref = false;
         if (name.includes("*")) {
             const lhsType = this.resolveExpressionType(lhs);
             lhsType.forEach(type => {
@@ -1297,22 +1298,23 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
                 if (!this.borrowChecker.checkIfAssignable(name)) {
                     throw new Error(`cannot assign to ${name}`);
                 }
-                return;
-
+                isDeref = true;
             });
         }
-        
         if (!ctx.expression(1)) return;
         
         const expr = ctx.expression(1);
-
-        this.visit(expr)
+        this.visit(expr);
         
         // Handle the expression recursively
         let borrowType = this.resolveExpressionType(expr);
 
         if (!this.borrowChecker.checkIfAssignable(name)) {
             throw new Error(`cannot assign to ${name}`);
+        }
+
+        if(isDeref) {
+            return;
         }
 
         if(borrowType[0].kind === "owned" && isMoveSemantics(borrowType[0].type) || borrowType[0].kind === "mutRef") {

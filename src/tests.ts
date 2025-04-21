@@ -81,13 +81,8 @@ function runTest(testName: string, code: string, expectedOutput: string[]) {
 }
 
 function runTestFromFilename(testName: string, filename: string, expectedOutput: string[]) {
-    fs.readFile(filename, "utf-8", (err, data) => {
-        if (err) {
-            console.error("Error reading file:", err.message);
-        } else {
-            runTest(testName, data, expectedOutput);
-        }
-    });
+    const data = fs.readFileSync(filename, "utf-8");
+    runTest(testName, data, expectedOutput);
 }
 
 runTest("Basic literal",
@@ -137,17 +132,36 @@ fn main() {
 }
 `, ["96"]);
 
+runTestFromFilename("Borrow checking if-else", "examples/ifelse1.rs", ["Error: cannot assign to a because it is borrowed"]);
 
-// runTestFromFilename("Borrow checking if-else", "examples/ifelse1.rs", []);
-
-/*
-runTest("Basic literal",
+runTest("Mutable references",
 `
 fn main() {
-    let a: i32 = 32;
+    let mut a: i32 = 32;
     let b: &mut i32 = &mut a;
     *b = 64;
     displayi32(a);
 }
-`, ["32"]);
-*/
+`, ["64"]);
+
+runTest("Mutable references (exclusive)",
+`
+fn main() {
+    let mut a: i32 = 32;
+    let b: &mut i32 = &mut a;
+    let c: &mut i32 = &mut a;
+    *b = 64;
+    displayi32(a);
+}
+`, ["Error: cannot borrow a as mutable because it is also borrowed as immutable"]);
+
+runTest("NLL1",
+`
+fn main() {
+    let mut a: Box<i32> = Box::new(32);
+    let b: &Box<i32> = &a;
+    displayi32(**b);
+    *a = 48;
+    displayi32(*a);
+}
+`, ["32", "48"]);
