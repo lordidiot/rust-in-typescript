@@ -62,8 +62,9 @@ class TestRunner implements IRunnerPlugin {
     }
 }
 
+const isDebug = process.argv.indexOf("--debug") !== -1;
 const runner = new TestRunner();
-const evaluator = new RustEvaluator(runner, false);
+const evaluator = new RustEvaluator(runner, isDebug);
 
 function runTest(testName: string, code: string, expectedOutput: string[]) {
     runner.clearOutputs();
@@ -98,3 +99,55 @@ fn main() {
 
 runTestFromFilename("Box basic", "examples/box.rs", ["32"]);
 
+runTest("Missing variable type",
+`
+fn main() {
+    let a = 32;
+}
+`, ["Error: Syntax error. line 3:10 mismatched input '=' expecting ':' at ="]);
+
+runTest("Function calling",
+`
+fn foo(x: i32) -> Box<i32> {
+    let b: Box<i32> = Box::new(x);
+    b
+}
+
+fn main() {
+    let a: Box<i32> = foo(123);
+    displayi32(*a + 1);
+}
+`, ["124"]);
+
+runTest("Recursion",
+`
+fn add(x: i32, y: i32) -> i32 {
+    if y == 0 {
+        return x;
+    } else {
+        return add(x + 1, y - 1);
+    }
+}
+
+fn main() {
+    let a: i32 = 32;
+    let b: i32 = 64;
+    let c: i32 = add(a, b);
+    displayi32(c);
+}
+`, ["96"]);
+
+
+// runTestFromFilename("Borrow checking if-else", "examples/ifelse1.rs", []);
+
+/*
+runTest("Basic literal",
+`
+fn main() {
+    let a: i32 = 32;
+    let b: &mut i32 = &mut a;
+    *b = 64;
+    displayi32(a);
+}
+`, ["32"]);
+*/

@@ -58,6 +58,7 @@ export class RustVirtualMachine {
     heap: Heap;
     private heapSize: number;
     private env: Value;
+    private globalEnv: Value;
     private isDebug: boolean;
     private topLevelEnvSize: number;
     outputFn: (output: string) => void;
@@ -104,10 +105,10 @@ export class RustVirtualMachine {
             }
             case "EXIT_SCOPE": {
                 const prevEnv = this.env;
-                this.env = this.heap.getPairFirst(this.env);
-                // TODO
-                // free(this.heap.getPairSecond(prevEnv))
-                // free(prevEnv)
+                const prevFrame = this.heap.getPairSecond(prevEnv);
+                this.env = this.heap.getPairFirst(prevEnv);
+                this.heap.freeArray(prevFrame);
+                this.heap.free(prevEnv);
                 break;
             }
             case "ENTER_LOOP": {
@@ -190,16 +191,19 @@ export class RustVirtualMachine {
                     savedPc: this.pc + 1,
                     savedEnv: this.env,
                 })
+                this.env = this.globalEnv;
                 return callPc.asu32(); // Change pc directly
             }
             case "RET": {
                 const frame = this.runtimeStack.pop()!;
-                while (!this.env.equals(frame.savedEnv)) {
-                    this.env = this.heap.getPairFirst(this.env);
-                    // TODO: Free
-                    // this.heap.free(...);
-                    // this.heap.free(...);
+                while (!this.env.equals(this.globalEnv)) {
+                    const nextEnv = this.heap.getPairFirst(this.env);
+                    const frame = this.heap.getPairSecond(this.env);
+                    this.heap.freeArray(frame);
+                    this.heap.free(this.env);
+                    this.env = nextEnv;
                 }
+                this.env = frame.savedEnv;
                 return frame.savedPc;
             };
             case "ADD": {
@@ -282,15 +286,15 @@ export class RustVirtualMachine {
         this.heap = new Heap(this.heapSize);
         this.operandStack = [];
         this.runtimeStack = [];
-        this.env = this.heap.allocateEnvironment(
+        this.globalEnv = this.heap.allocateEnvironment(
             Value.fromAddress(0xffffffff), // Invalid address
             this.topLevelEnvSize
         );
+        this.env = this.globalEnv;
         while (this.bytecode[this.pc].type !== "DONE") {
             this.pc = this.step();
         }
         return 0;
-        // return this.operandStack.pop()!.asi32();
     }
 }
 
@@ -394,39 +398,45 @@ const HALF_WORD_SIZE = 4;
 const INT_TAG = 0;
 const PAIR_TAG = 1;
 const ARRAY_TAG = 2;
+const FREED_TAG = 255;
 class Heap {
     private data: ArrayBuffer;
     private heapTop: address = 0;
     private heapSize: number;
     private view: DataView;
-    private freeList: address[] = [];
-    private allocations: Map<address, number> = new Map(); // Track allocated blocks
+    private freeHead: address;
 
     constructor(heapSize: number) {
         this.heapSize = heapSize;
         this.data = new ArrayBuffer(heapSize);
         this.view = new DataView(this.data);
+        this.freeHead = -1; // INVALID ADDRESS
     }
 
     // Header: [1 byte tag] [4 bytes size] [3 bytes padding]
     // Automatically adds header size
     // Returns the address of the allocated memory
     allocate(tag: number, size: number): Value {
+        size = Math.max(size, WORD_SIZE); // Ensure size is at least 8 bytes
         size += WORD_SIZE; // Add header size
 
-        // First try to reuse freed blocks
-        for (let i = 0; i < this.freeList.length; i++) {
-            const candidate = this.freeList[i];
-            const candidateSize = this.view.getUint32(candidate - WORD_SIZE + 1);
-            
-            if (candidateSize >= size) {
-                // Found a suitable free block
-                this.freeList.splice(i, 1);
-                this.view.setUint8(candidate - WORD_SIZE, tag);
-                this.view.setUint32(candidate - WORD_SIZE + 1, size);
-                this.allocations.set(candidate, size);
-                return Value.fromAddress(candidate);
+        // Check freelist
+        let prev = -1;
+        let possible = this.freeHead;
+        while (possible !== -1) {
+            const possibleSize = this.view.getUint32(possible + 1);
+            const next = this.view.getInt32(possible + WORD_SIZE); // Use int32 to check for -1
+            if (possibleSize >= size) {
+                if (prev === -1) {
+                    this.freeHead = this.view.getInt32(possible + WORD_SIZE);
+                } else {
+                    this.view.setUint32(prev + WORD_SIZE, next);
+                }
+                this.view.setUint8(possible, tag);
+                return Value.fromAddress(possible + WORD_SIZE);
             }
+            prev = possible;
+            possible = next;
         }
 
         if (this.heapTop + size > this.heapSize) {
@@ -482,26 +492,26 @@ class Heap {
         return env;
     }
 
-    free(address: address): void {
-        // TODO: Doesn't do anything right now
-        // Remember to subtract header size (WORD_SIZE) from address
-        // to get the actual address in the heap
+    free(addressVal: Value): void {
+        const address = addressVal.asAddress();
         const headerAddress = address - WORD_SIZE;
-        
-        // Verify this is a valid allocation
-        if (!this.allocations.has(address)) {
-            throw new Error(`Attempt to free invalid address: ${address}`);
-        }
-        const size = this.view.getUint32(headerAddress + 1);
-        this.freeList.push(headerAddress);
-        this.allocations.delete(address);
-        
-        // Zero out the memory
-        for (let i = 0; i < size; i++) {
-            this.view.setUint8(headerAddress + i, 0);
-        }
-        
         this.view.setUint8(headerAddress, 255); // Special "freed" tag
+        this.view.setInt32(headerAddress + WORD_SIZE, this.freeHead);
+        this.freeHead = headerAddress;
+    }
+
+    freeArray(array: Value): void {
+        const length = this.getArrayLength(array);
+        let addressSet: Set<number> = new Set();
+        for (let i = 0; i < length; i++) {
+            const element = this.getArrayElement(array, i);
+            if (element.isAddress()) {
+                addressSet.add(element.asAddress());
+            }
+        }
+        addressSet.forEach(address => {
+            this.free(Value.fromAddress(address));
+        });
     }
 
     // Helper functions

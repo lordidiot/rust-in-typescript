@@ -2,18 +2,16 @@ import { BasicEvaluator } from "conductor/dist/conductor/runner";
 import { IRunnerPlugin } from "conductor/dist/conductor/runner/types";
 import { RustLexer } from "./parser/src/RustLexer";
 import { RustParser } from "./parser/src/RustParser";
-import { CharStream, CommonTokenStream, ParseTree } from "antlr4ng";
+import { ATNSimulator, BaseErrorListener, CharStream, CommonTokenStream, ParseTree, RecognitionException, Recognizer, Token } from "antlr4ng";
 import { Bytecode, DONE, RustVirtualMachine } from "./RustVirtualMachine";
 import { RustCompilerVisitor, RustTypeCheckerVisitor, countVariableUsages, BorrowCheckingVisitor } from "./RustCompiler";
 
 export class RustEvaluator extends BasicEvaluator {
-    private compilerVisitor: RustCompilerVisitor;
     private isDebug: boolean;
 
     constructor(conductor: IRunnerPlugin, isDebug: boolean = false) {
         super(conductor);
         this.isDebug = isDebug;
-        this.compilerVisitor = new RustCompilerVisitor();
     }
 
     async evaluateChunk(chunk: string): Promise<void> {
@@ -23,6 +21,8 @@ export class RustEvaluator extends BasicEvaluator {
             const lexer = new RustLexer(inputStream);
             const tokenStream = new CommonTokenStream(lexer);
             const parser = new RustParser(tokenStream);
+            parser.removeErrorListeners();
+            parser.addErrorListener(new ThrowingErrorListener());
 
             // Type check
             const tree = parser.crate();
@@ -40,9 +40,10 @@ export class RustEvaluator extends BasicEvaluator {
             if (this.isDebug) {
                 // console.log(prettyPrint(tree.toStringTree(parser)));
             }
-            this.compilerVisitor.visit(tree);
-            const bytecode = this.compilerVisitor.bytecode;
-            const topLevelEnvSize = this.compilerVisitor.compilerEnv.locals.length;
+            const compilerVisitor = new RustCompilerVisitor();
+            compilerVisitor.visit(tree);
+            const bytecode = compilerVisitor.bytecode;
+            const topLevelEnvSize = compilerVisitor.compilerEnv.locals.length;
 
             // Run the bytecode
             const outputFn = (output: string) => {
@@ -57,13 +58,26 @@ export class RustEvaluator extends BasicEvaluator {
         }  catch (error) {
             // Handle errors and send them to the REPL
             // Print stack trace for debugging
-            console.error(error);
+            if (this.isDebug) {
+                console.error("Error stack trace:");
+                console.error(error.stack);
+            }
             if (error instanceof Error) {
                 this.conductor.sendOutput(`Error: ${error.message}`);
             } else {
                 this.conductor.sendOutput(`Error: ${String(error)}`);
             }
         }
+    }
+}
+
+class ThrowingErrorListener extends BaseErrorListener {
+    syntaxError<S extends Token, T extends ATNSimulator>(recognizer: Recognizer<T>, offendingSymbol: S | null, line: number, column: number, msg: string, e: RecognitionException | null): void {
+        let errorMessage = `Syntax error. line ${line}:${column} ${msg}`;
+        if (offendingSymbol) {
+            errorMessage += ` at ${offendingSymbol.text}`;
+        }
+        throw new Error(errorMessage);
     }
 }
 
