@@ -58,6 +58,7 @@ export class RustVirtualMachine {
     heap: Heap;
     private heapSize: number;
     private env: Value;
+    private globalEnv: Value;
     private isDebug: boolean;
     private topLevelEnvSize: number;
     outputFn: (output: string) => void;
@@ -190,16 +191,18 @@ export class RustVirtualMachine {
                     savedPc: this.pc + 1,
                     savedEnv: this.env,
                 })
+                this.env = this.globalEnv;
                 return callPc.asu32(); // Change pc directly
             }
             case "RET": {
                 const frame = this.runtimeStack.pop()!;
-                while (!this.env.equals(frame.savedEnv)) {
+                while (!this.env.equals(this.globalEnv)) {
                     this.env = this.heap.getPairFirst(this.env);
                     // TODO: Free
                     // this.heap.free(...);
                     // this.heap.free(...);
                 }
+                this.env = frame.savedEnv;
                 return frame.savedPc;
             };
             case "ADD": {
@@ -282,10 +285,11 @@ export class RustVirtualMachine {
         this.heap = new Heap(this.heapSize);
         this.operandStack = [];
         this.runtimeStack = [];
-        this.env = this.heap.allocateEnvironment(
+        this.globalEnv = this.heap.allocateEnvironment(
             Value.fromAddress(0xffffffff), // Invalid address
             this.topLevelEnvSize
         );
+        this.env = this.globalEnv;
         while (this.bytecode[this.pc].type !== "DONE") {
             this.pc = this.step();
         }

@@ -1691,6 +1691,15 @@ export class RustCompilerVisitor extends AbstractParseTreeVisitor<void> implemen
         if (ctx.PLUS()) {
             this.bytecode.push(ADD());
             return;
+        } else if (ctx.MINUS()) {
+            this.bytecode.push(SUB());
+            return;
+        } else if (ctx.STAR()) {
+            this.bytecode.push(MUL());
+            return;
+        } else if (ctx.SLASH()) {
+            this.bytecode.push(DIV());
+            return;
         }
         throw new Error("Not implemented (visitArithmeticOrLogicalExpression)");
     }

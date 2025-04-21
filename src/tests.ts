@@ -62,8 +62,9 @@ class TestRunner implements IRunnerPlugin {
     }
 }
 
+const isDebug = process.argv.indexOf("--debug") !== -1;
 const runner = new TestRunner();
-const evaluator = new RustEvaluator(runner, false);
+const evaluator = new RustEvaluator(runner, isDebug);
 
 function runTest(testName: string, code: string, expectedOutput: string[]) {
     runner.clearOutputs();
@@ -117,6 +118,24 @@ fn main() {
     displayi32(*a + 1);
 }
 `, ["124"]);
+
+runTest("Function calling",
+`
+fn add(x: i32, y: i32) -> i32 {
+    if y == 0 {
+        return x;
+    } else {
+        return add(x + 1, y - 1);
+    }
+}
+
+fn main() {
+    let a: i32 = 32;
+    let b: i32 = 64;
+    let c: i32 = add(a, b);
+    displayi32(c);
+}
+`, ["96"]);
 
 
 // runTestFromFilename("Borrow checking if-else", "examples/ifelse1.rs", []);

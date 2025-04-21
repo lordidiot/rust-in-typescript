@@ -541,8 +541,8 @@ blockExpression
     ;
 
 statements
-    : statement+ expression?
-    | expression
+    : expression
+    | statement+ expression?
     ;
 
 asyncBlockExpression
