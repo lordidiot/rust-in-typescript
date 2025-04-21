@@ -433,8 +433,8 @@ letStatement
     ;
 
 expressionStatement
-    : expression SEMI
-    | expressionWithBlock SEMI?
+    : expressionWithBlock SEMI?
+    | expression SEMI
     ;
 
 // 8.2

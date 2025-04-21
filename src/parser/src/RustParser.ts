@@ -4799,26 +4799,26 @@ export class RustParser extends RustParserBase {
                 this.enterOuterAlt(localContext, 1);
                 {
                 this.state = 1236;
-                this.expression(0);
-                this.state = 1237;
-                this.match(RustParser.SEMI);
+                this.expressionWithBlock();
+                this.state = 1238;
+                this.errorHandler.sync(this);
+                switch (this.interpreter.adaptivePredict(this.tokenStream, 148, this.context) ) {
+                case 1:
+                    {
+                    this.state = 1237;
+                    this.match(RustParser.SEMI);
+                    }
+                    break;
+                }
                 }
                 break;
             case 2:
                 this.enterOuterAlt(localContext, 2);
                 {
-                this.state = 1239;
-                this.expressionWithBlock();
+                this.state = 1240;
+                this.expression(0);
                 this.state = 1241;
-                this.errorHandler.sync(this);
-                switch (this.interpreter.adaptivePredict(this.tokenStream, 148, this.context) ) {
-                case 1:
-                    {
-                    this.state = 1240;
-                    this.match(RustParser.SEMI);
-                    }
-                    break;
-                }
+                this.match(RustParser.SEMI);
                 }
                 break;
             }
@@ -11574,8 +11574,8 @@ export class RustParser extends RustParserBase {
         8,69,3,69,1198,8,69,1,70,1,70,1,70,1,70,1,70,1,70,1,71,1,71,1,71,
         1,71,1,71,1,72,1,72,3,72,1213,8,72,1,73,1,73,1,73,3,73,1218,8,73,
         1,74,1,74,1,74,1,74,3,74,1224,8,74,1,75,1,75,1,75,1,75,1,75,1,75,
-        1,75,3,75,1233,8,75,1,75,1,75,1,76,1,76,1,76,1,76,1,76,3,76,1242,
-        8,76,3,76,1244,8,76,1,77,1,77,4,77,1248,8,77,11,77,12,77,1249,1,
+        1,75,3,75,1233,8,75,1,75,1,75,1,76,1,76,3,76,1239,8,76,1,76,1,76,
+        1,76,3,76,1244,8,76,1,77,1,77,4,77,1248,8,77,11,77,12,77,1249,1,
         77,1,77,1,77,1,77,1,77,1,77,3,77,1258,8,77,1,77,1,77,1,77,1,77,1,
         77,1,77,1,77,3,77,1267,8,77,1,77,1,77,1,77,1,77,3,77,1273,8,77,1,
         77,3,77,1276,8,77,1,77,1,77,3,77,1280,8,77,1,77,3,77,1283,8,77,1,
@@ -12033,10 +12033,10 @@ export class RustParser extends RustParserBase {
         1226,5,15,0,0,1226,1227,3,248,124,0,1227,1228,5,117,0,0,1228,1229,
         3,284,142,0,1229,1232,1,0,0,0,1230,1231,5,102,0,0,1231,1233,3,154,
         77,0,1232,1230,1,0,0,0,1232,1233,1,0,0,0,1233,1234,1,0,0,0,1234,
-        1235,5,116,0,0,1235,151,1,0,0,0,1236,1237,3,154,77,0,1237,1238,5,
-        116,0,0,1238,1244,1,0,0,0,1239,1241,3,160,80,0,1240,1242,5,116,0,
-        0,1241,1240,1,0,0,0,1241,1242,1,0,0,0,1242,1244,1,0,0,0,1243,1236,
-        1,0,0,0,1243,1239,1,0,0,0,1244,153,1,0,0,0,1245,1247,6,77,-1,0,1246,
+        1235,5,116,0,0,1235,151,1,0,0,0,1236,1238,3,160,80,0,1237,1239,5,
+        116,0,0,1238,1237,1,0,0,0,1238,1239,1,0,0,0,1239,1244,1,0,0,0,1240,
+        1241,3,154,77,0,1241,1242,5,116,0,0,1242,1244,1,0,0,0,1243,1236,
+        1,0,0,0,1243,1240,1,0,0,0,1244,153,1,0,0,0,1245,1247,6,77,-1,0,1246,
         1248,3,142,71,0,1247,1246,1,0,0,0,1248,1249,1,0,0,0,1249,1247,1,
         0,0,0,1249,1250,1,0,0,0,1250,1251,1,0,0,0,1251,1252,3,154,77,40,
         1252,1326,1,0,0,0,1253,1326,3,162,81,0,1254,1326,3,164,82,0,1255,
@@ -12472,7 +12472,7 @@ export class RustParser extends RustParserBase {
         969,974,978,980,983,989,995,1002,1006,1010,1016,1022,1028,1032,1035,
         1041,1047,1053,1059,1063,1069,1075,1083,1088,1092,1094,1102,1107,
         1109,1116,1122,1125,1130,1133,1138,1140,1144,1157,1161,1165,1172,
-        1177,1185,1190,1195,1197,1212,1217,1223,1232,1241,1243,1249,1257,
+        1177,1185,1190,1195,1197,1212,1217,1223,1232,1238,1243,1249,1257,
         1266,1272,1275,1279,1282,1286,1292,1302,1306,1313,1317,1325,1336,
         1375,1391,1407,1409,1411,1421,1432,1438,1442,1449,1452,1455,1459,
         1471,1475,1481,1488,1491,1498,1505,1510,1519,1525,1527,1532,1538,
@@ -15887,14 +15887,14 @@ export class ExpressionStatementContext extends antlr.ParserRuleContext {
     public constructor(parent: antlr.ParserRuleContext | null, invokingState: number) {
         super(parent, invokingState);
     }
-    public expression(): ExpressionContext | null {
-        return this.getRuleContext(0, ExpressionContext);
+    public expressionWithBlock(): ExpressionWithBlockContext | null {
+        return this.getRuleContext(0, ExpressionWithBlockContext);
     }
     public SEMI(): antlr.TerminalNode | null {
         return this.getToken(RustParser.SEMI, 0);
     }
-    public expressionWithBlock(): ExpressionWithBlockContext | null {
-        return this.getRuleContext(0, ExpressionWithBlockContext);
+    public expression(): ExpressionContext | null {
+        return this.getRuleContext(0, ExpressionContext);
     }
     public override get ruleIndex(): number {
         return RustParser.RULE_expressionStatement;
