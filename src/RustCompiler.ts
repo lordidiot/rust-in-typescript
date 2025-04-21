@@ -935,6 +935,18 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
     }
 
     visitFunction_(ctx: Function_Context): void {
+        let isNestedFunc = false;
+
+        let prevBorrowChecker: BorrowChecker;
+        let prevUsage: UsageMap;
+        let prevFuncName: string;
+        if(this.currentFunc) {
+            isNestedFunc = true;
+            prevBorrowChecker = this.borrowChecker;
+            prevUsage = this.usageMap;
+            prevFuncName = this.currentFunc;
+        }
+
         this.currentFunc = ctx.identifier().getText();
 
         this.borrowChecker = new BorrowChecker();
@@ -992,8 +1004,16 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
         this.visit(ctx.blockExpression());
 
         // Clean up
-        this.borrowChecker = null;
-        this.usageMap = null;
+        if (isNestedFunc) {
+            this.borrowChecker = prevBorrowChecker;
+            this.usageMap = prevUsage;
+            this.currentFunc = prevFuncName;
+        } else {
+            this.borrowChecker = null;
+            this.usageMap = null;
+            this.currentFunc = null;
+        }
+        
     }
     
     // Helper function to recursively convert RustType to BorrowNodes
@@ -1082,7 +1102,12 @@ export class BorrowCheckingVisitor extends AbstractParseTreeVisitor<void> implem
     visitBlockExpression(ctx: BlockExpressionContext): void {
         const scanResults = new LocalScannerVisitor(ctx).visit(ctx);
         const varsToDrop: string[] = [];
-        scanResults.names.forEach(name => varsToDrop.push(name));
+        scanResults.names.forEach((name, i) => {
+            if (!isFnType(scanResults.types[i])) {
+                varsToDrop.push(name);
+            }
+        });
+
 
         this.visitChildren(ctx);
         this.borrowChecker.exitScope(varsToDrop);
